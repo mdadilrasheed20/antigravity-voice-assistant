@@ -1,41 +1,16 @@
 const { spawn, execSync } = require('child_process');
 const fs = require('fs');
 const path = require('path');
-const os = require('os');
 
-// State and storage paths
-const DATA_DIR = path.join(os.homedir(), 'AppData', 'Local', 'fast-tts');
-if (!fs.existsSync(DATA_DIR)) {
-  try { fs.mkdirSync(DATA_DIR, { recursive: true }); } catch (e) {}
-}
+const DIR = 'C:\\Users\\Adil\\AppData\\Local\\fast-tts';
+if (!fs.existsSync(DIR)) fs.mkdirSync(DIR, { recursive: true });
 
-const CONFIG_PATH = path.join(DATA_DIR, 'config.json');
-const STATE_PATH = path.join(DATA_DIR, 'state.json');
-
+const CONFIG_PATH = path.join(DIR, 'config.json');
+const STATE_PATH = path.join(DIR, 'state.json');
 const DEDUP_PATH = path.join(DIR, 'last_speech.json');
-
-function checkAndSetDeduplication(spokenText) {
-  try {
-    const now = Date.now();
-    if (fs.existsSync(DEDUP_PATH)) {
-      const data = JSON.parse(fs.readFileSync(DEDUP_PATH, 'utf8'));
-      if (data && data.text === spokenText && (now - data.time) < 8000) {
-        return true; // Duplicate!
-      }
-    }
-    fs.writeFileSync(DEDUP_PATH, JSON.stringify({ text: spokenText, time: now }), 'utf8');
-  } catch (e) {}
-  return false;
-}
-
-const PID_PATH = path.join(DATA_DIR, 'active_pid.txt');
-const TEXT_PATH = path.join(DATA_DIR, 'current_speech.txt');
+const PID_PATH = path.join(DIR, 'active_pid.txt');
 const PS_EXE = 'C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe';
 
-/**
- * Normalizes rich technical markdown into natural, fluent human speech.
- * Strips headers, URLs, links, emojis, long code blocks, and markdown noise.
- */
 function cleanTextForSpeech(raw) {
   if (!raw || typeof raw !== 'string') return '';
   let text = raw;
@@ -62,7 +37,6 @@ function cleanTextForSpeech(raw) {
   text = text.replace(/\bC#\b/g, 'C Sharp');
 
   // 6. Normalize Windows file paths with backslashes
-  // e.g. C:\Users\Adil\antigravity-voice-assistant\ -> antigravity-voice-assistant
   // e.g. C:\Projects\MyApp -> MyApp
   text = text.replace(/[A-Za-z]:\\[^\s\r\n\(\)\[\]"'`*]+/g, (match) => {
     const parts = match.replace(/\\+$/, '').split('\\').filter(Boolean);
@@ -86,7 +60,7 @@ function cleanTextForSpeech(raw) {
   // 11. Clean up markdown bold, italics, strikethrough, backticks
   text = text.replace(/[*_~`]/g, ' ');
 
-  // 12. Shorten git commit hex hashes (e.g. acbe0d8 or 40-char hashes) to avoid spelling hex chars
+  // 12. Shorten git commit hex hashes to avoid spelling hex chars
   text = text.replace(/\b[0-9a-f]{7,40}\b/gi, 'commit');
 
   // 13. Remove remaining backslashes completely so 'backslash' is never spoken!
@@ -134,13 +108,14 @@ function loadState() {
       return JSON.parse(fs.readFileSync(STATE_PATH, 'utf8'));
     }
   } catch (e) {}
-  return { isSpeaking: false, currentText: '', activePid: null, queueLength: 0 };
+  return { isSpeaking: false, isPaused: false, currentText: '', activePid: null, queueLength: 0 };
 }
 
-function updateState(isSpeaking, currentText = '', activePid = null) {
+function updateState(isSpeaking, isPaused = false, currentText = '', activePid = null) {
   try {
     fs.writeFileSync(STATE_PATH, JSON.stringify({
       isSpeaking,
+      isPaused,
       currentText,
       activePid,
       queueLength: queue.length,
@@ -149,35 +124,146 @@ function updateState(isSpeaking, currentText = '', activePid = null) {
   } catch (e) {}
 }
 
-let activeProcess = null;
+function checkAndSetDeduplication(spokenText) {
+  try {
+    const now = Date.now();
+    if (fs.existsSync(DEDUP_PATH)) {
+      const data = JSON.parse(fs.readFileSync(DEDUP_PATH, 'utf8'));
+      if (data && data.text === spokenText && (now - data.time) < 8000) {
+        return true; // Duplicate!
+      }
+    }
+    fs.writeFileSync(DEDUP_PATH, JSON.stringify({ text: spokenText, time: now }), 'utf8');
+  } catch (e) {}
+  return false;
+}
+
+// Persistent interactive PowerShell speech worker
+let workerProcess = null;
+let currentResolve = null;
+let activeText = '';
 const queue = [];
 
-function stop() {
-  while (queue.length > 0) {
-    const item = queue.shift();
-    if (item.resolve) item.resolve({ played: false, stopped: true });
-  }
+const PS_WORKER_SCRIPT = `
+Add-Type -AssemblyName System.Speech
+$s = New-Object System.Speech.Synthesis.SpeechSynthesizer
+$s.SelectVoice('Microsoft Zira Desktop')
+$s.Rate = 1
 
-  if (activeProcess) {
+Register-ObjectEvent -InputObject $s -EventName SpeakCompleted -Action {
+  [Console]::WriteLine("EVENT:DONE")
+} | Out-Null
+
+[Console]::WriteLine("EVENT:READY")
+
+while ($line = [Console]::ReadLine()) {
+  if ($line.StartsWith("SPEAK_B64:")) {
     try {
-      execSync('taskkill /F /T /PID ' + activeProcess.pid, { stdio: 'ignore' });
-    } catch (e) {}
-    activeProcess = null;
+      $b64 = $line.Substring(10)
+      $bytes = [System.Convert]::FromBase64String($b64)
+      $text = [System.Text.Encoding]::UTF8.GetString($bytes)
+      $s.SpeakAsyncCancelAll()
+      $s.SpeakAsync($text) | Out-Null
+      [Console]::WriteLine("STATE:SPEAKING")
+    } catch {
+      [Console]::WriteLine("ERROR:" + $_.Exception.Message)
+    }
   }
+  elseif ($line.StartsWith("VOICE:")) {
+    $v = $line.Substring(6).Trim().ToLower()
+    if ($v.Contains('david')) {
+      $s.SelectVoice('Microsoft David Desktop')
+    } elseif ($v.Contains('hazel')) {
+      $s.SelectVoice('Microsoft Hazel Desktop')
+    } else {
+      $s.SelectVoice('Microsoft Zira Desktop')
+    }
+  }
+  elseif ($line.StartsWith("RATE:")) {
+    try {
+      $s.Rate = [int]$line.Substring(5).Trim()
+    } catch {}
+  }
+  elseif ($line -eq "PAUSE") {
+    if ($s.State -eq [System.Speech.Synthesis.SynthesizerState]::Speaking) {
+      $s.Pause()
+      [Console]::WriteLine("STATE:PAUSED")
+    }
+  }
+  elseif ($line -eq "RESUME") {
+    if ($s.State -eq [System.Speech.Synthesis.SynthesizerState]::Paused) {
+      $s.Resume()
+      [Console]::WriteLine("STATE:SPEAKING")
+    }
+  }
+  elseif ($line -eq "STOP") {
+    $s.SpeakAsyncCancelAll()
+    [Console]::WriteLine("STATE:STOPPED")
+  }
+  elseif ($line -eq "EXIT") {
+    break
+  }
+}
+`;
+
+function ensureWorker() {
+  if (workerProcess && !workerProcess.killed) return;
 
   try {
-    if (fs.existsSync(PID_PATH)) {
-      const pidStr = fs.readFileSync(PID_PATH, 'utf8').trim();
-      if (pidStr) {
-        try {
-          execSync('taskkill /F /T /PID ' + pidStr, { stdio: 'ignore' });
-        } catch (e) {}
-      }
-      fs.unlinkSync(PID_PATH);
-    }
-  } catch (e) {}
+    workerProcess = spawn(PS_EXE, ['-NoProfile', '-NonInteractive', '-Command', PS_WORKER_SCRIPT], {
+      windowsHide: true,
+      stdio: ['pipe', 'pipe', 'pipe']
+    });
 
-  updateState(false, '', null);
+    const pid = workerProcess.pid;
+    fs.writeFileSync(PID_PATH, String(pid), 'utf8');
+
+    workerProcess.stdout.on('data', (buf) => {
+      const lines = buf.toString('utf8').trim().split('\n');
+      for (const line of lines) {
+        const l = line.trim();
+        if (l === 'STATE:SPEAKING') {
+          updateState(true, false, activeText, pid);
+        } else if (l === 'STATE:PAUSED') {
+          updateState(false, true, activeText, pid);
+        } else if (l === 'STATE:STOPPED' || l === 'EVENT:DONE') {
+          updateState(false, false, '', null);
+          if (currentResolve) {
+            const res = currentResolve;
+            currentResolve = null;
+            res({ played: true });
+          }
+          _playNextInQueue();
+        }
+      }
+    });
+
+    workerProcess.on('exit', () => {
+      workerProcess = null;
+      updateState(false, false, '', null);
+      try { if (fs.existsSync(PID_PATH)) fs.unlinkSync(PID_PATH); } catch (e) {}
+      if (currentResolve) {
+        const res = currentResolve;
+        currentResolve = null;
+        res({ played: false, exit: true });
+      }
+      _playNextInQueue();
+    });
+
+    workerProcess.on('error', () => {
+      workerProcess = null;
+      updateState(false, false, '', null);
+      if (currentResolve) {
+        const res = currentResolve;
+        currentResolve = null;
+        res({ played: false, error: true });
+      }
+      _playNextInQueue();
+    });
+  } catch (err) {
+    workerProcess = null;
+    updateState(false, false, '', null);
+  }
 }
 
 function _startPlayback(spokenText, voiceName, rate) {
@@ -188,85 +274,93 @@ function _startPlayback(spokenText, voiceName, rate) {
       return;
     }
 
+    ensureWorker();
+    if (!workerProcess || !workerProcess.stdin) {
+      resolve({ played: false, error: 'Worker unavailable' });
+      _playNextInQueue();
+      return;
+    }
+
+    currentResolve = resolve;
+    activeText = spokenText;
+
     const cfg = loadConfig();
     const voice = voiceName || cfg.voice || 'Zira';
     const spd = typeof rate === 'number' ? rate : (cfg.rate || 1);
 
-    fs.writeFileSync(TEXT_PATH, spokenText, 'utf8');
-
-    let voiceSelect = "$s.SelectVoice('Microsoft Zira Desktop');";
-    if (voice) {
-      const v = voice.toLowerCase();
-      if (v.includes('david')) {
-        voiceSelect = "$s.SelectVoice('Microsoft David Desktop');";
-      } else if (v.includes('hazel')) {
-        voiceSelect = "$s.SelectVoice('Microsoft Hazel Desktop');";
-      }
-    }
-
-    const clampedRate = Math.max(-10, Math.min(10, Math.round(spd)));
-    const escapedTextPath = TEXT_PATH.replace(/\\/g, '\\\\');
-
-    const psScript = `
-Add-Type -AssemblyName System.Speech
-$s = New-Object System.Speech.Synthesis.SpeechSynthesizer
-${voiceSelect}
-$s.Rate = ${clampedRate}
-$txt = [System.IO.File]::ReadAllText('${escapedTextPath}', [System.Text.Encoding]::UTF8)
-$s.Speak($txt)
-`;
-
     try {
-      if (fs.existsSync(PID_PATH)) {
-        try {
-          const oldPid = fs.readFileSync(PID_PATH, 'utf8').trim();
-          if (oldPid) execSync('taskkill /F /T /PID ' + oldPid, { stdio: 'ignore' });
-        } catch (e) {}
-      }
-      activeProcess = spawn(PS_EXE, ['-NoProfile', '-NonInteractive', '-Command', psScript], {
-        windowsHide: true,
-        stdio: 'ignore'
-      });
+      workerProcess.stdin.write('VOICE:' + voice + '\n');
+      workerProcess.stdin.write('RATE:' + spd + '\n');
 
-      const pid = activeProcess.pid;
-      fs.writeFileSync(PID_PATH, String(pid), 'utf8');
-      updateState(true, spokenText, pid);
-
-      activeProcess.on('exit', () => {
-        if (activeProcess && activeProcess.pid === pid) {
-          activeProcess = null;
-        }
-        try {
-          if (fs.existsSync(PID_PATH)) fs.unlinkSync(PID_PATH);
-        } catch (e) {}
-        resolve({ played: true });
-        _playNextInQueue();
-      });
-
-      activeProcess.on('error', () => {
-        activeProcess = null;
-        resolve({ played: false, error: true });
-        _playNextInQueue();
-      });
-    } catch (err) {
-      activeProcess = null;
-      resolve({ played: false, error: err.message });
+      const b64 = Buffer.from(spokenText, 'utf8').toString('base64');
+      workerProcess.stdin.write('SPEAK_B64:' + b64 + '\n');
+    } catch (e) {
+      resolve({ played: false, error: e.message });
       _playNextInQueue();
     }
   });
 }
 
 function _playNextInQueue() {
-  if (activeProcess || queue.length === 0) {
-    if (!activeProcess) {
-      updateState(false, '', null);
-    }
+  const st = loadState();
+  if (st.isSpeaking || st.isPaused || queue.length === 0) {
     return;
   }
   const next = queue.shift();
   _startPlayback(next.text, next.voice, next.rate).then((res) => {
     if (next.resolve) next.resolve(res);
   });
+}
+
+// Pause active speech right where it is
+function pause() {
+  if (workerProcess && workerProcess.stdin) {
+    try { workerProcess.stdin.write('PAUSE\n'); } catch (e) {}
+  }
+  updateState(false, true, activeText, workerProcess ? workerProcess.pid : null);
+}
+
+// Resume paused speech from exact paused word
+function resume() {
+  if (workerProcess && workerProcess.stdin) {
+    try { workerProcess.stdin.write('RESUME\n'); } catch (e) {}
+  }
+  updateState(true, false, activeText, workerProcess ? workerProcess.pid : null);
+}
+
+// Toggle Pause/Resume, or Replay if stopped
+function togglePlayPause() {
+  const st = loadState();
+  if (st.isSpeaking) {
+    pause();
+    return 'PAUSED';
+  } else if (st.isPaused) {
+    resume();
+    return 'RESUMED';
+  } else {
+    // Idle -> Replay last
+    const cfg = loadConfig();
+    if (cfg.history && cfg.history.length > 0) {
+      const last = cfg.history[cfg.history.length - 1];
+      playDirect(last.text, last.voice, last.rate);
+      return 'REPLAYING';
+    }
+  }
+  return 'IDLE';
+}
+
+function stop() {
+  // Clear queue
+  while (queue.length > 0) {
+    const item = queue.shift();
+    if (item.resolve) item.resolve({ played: false, stopped: true });
+  }
+
+  if (workerProcess && workerProcess.stdin) {
+    try { workerProcess.stdin.write('STOP\n'); } catch (e) {}
+  }
+
+  updateState(false, false, '', null);
 }
 
 function playDirect(text, voiceName, rate) {
@@ -278,12 +372,13 @@ function playDirect(text, voiceName, rate) {
 function enqueueSpeech(text, voiceName, rate) {
   return new Promise((resolve) => {
     const spokenText = cleanTextForSpeech(text);
-    if (checkAndSetDeduplication(spokenText)) {
-      resolve({ played: false, reason: 'Duplicate speech prevented' });
-      return;
-    }
     if (!spokenText || !spokenText.trim()) {
       resolve({ played: false, reason: 'Empty text' });
+      return;
+    }
+
+    if (checkAndSetDeduplication(spokenText)) {
+      resolve({ played: false, reason: 'Duplicate speech prevented' });
       return;
     }
 
@@ -303,9 +398,9 @@ function enqueueSpeech(text, voiceName, rate) {
     cfg.currentIndex = cfg.history.length - 1;
     saveConfig(cfg);
 
-    if (activeProcess) {
+    const st = loadState();
+    if (st.isSpeaking || st.isPaused) {
       queue.push({ text: spokenText, voice, rate: spd, resolve });
-      updateState(true, loadState().currentText, activeProcess.pid);
     } else {
       _startPlayback(spokenText, voice, spd).then(resolve);
     }
@@ -318,6 +413,9 @@ module.exports = {
   saveConfig,
   loadState,
   updateState,
+  pause,
+  resume,
+  togglePlayPause,
   stop,
   playDirect,
   enqueueSpeech

@@ -59,6 +59,18 @@
         "command": "fastTts.settings",
         "title": "Settings (Voice & Speed)",
         "category": "Voice"
+      },
+      {
+        "command": "fastTts.pause",
+        "title": "Voice: Pause Spoken Audio"
+      },
+      {
+        "command": "fastTts.resume",
+        "title": "Voice: Resume Spoken Audio"
+      },
+      {
+        "command": "fastTts.togglePlayPause",
+        "title": "Voice: Toggle Play / Pause / Replay"
       }
     ],
     "viewsContainers": {
@@ -78,6 +90,14 @@
           "name": "Speech Controls"
         }
       ]
-    }
+    },
+    "keybindings": [
+      {
+        "command": "fastTts.togglePlayPause",
+        "key": "alt+p",
+        "mac": "cmd+alt+p",
+        "when": "true"
+      }
+    ]
   }
 }

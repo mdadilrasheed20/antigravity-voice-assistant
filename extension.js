@@ -217,6 +217,25 @@ function activate(context) {
   context.subscriptions.push({ dispose: () => clearInterval(watcherInterval) });
 
   // Registered Commands
+    context.subscriptions.push(vscode.commands.registerCommand('fastTts.pause', () => {
+    player.pause();
+    vscode.window.showInformationMessage('Spoken audio paused.');
+    refreshUI();
+  }));
+
+  context.subscriptions.push(vscode.commands.registerCommand('fastTts.resume', () => {
+    player.resume();
+    vscode.window.showInformationMessage('Spoken audio resumed.');
+    refreshUI();
+  }));
+
+  context.subscriptions.push(vscode.commands.registerCommand('fastTts.togglePlayPause', () => {
+    const res = player.togglePlayPause();
+    if (res === 'PAUSED') vscode.window.showInformationMessage('Spoken audio paused.');
+    else if (res === 'RESUMED') vscode.window.showInformationMessage('Spoken audio resumed.');
+    refreshUI();
+  }));
+
   context.subscriptions.push(vscode.commands.registerCommand('fastTts.stop', () => {
     player.stop();
     vscode.window.showInformationMessage('Spoken audio cancelled.');
@@ -346,7 +365,16 @@ function activate(context) {
 
       webviewView.webview.onDidReceiveMessage(message => {
         const cfg = player.loadConfig();
-        if (message.command === 'toggle') {
+        if (message.command === 'pause') {
+          player.pause();
+          refreshUI();
+        } else if (message.command === 'resume') {
+          player.resume();
+          refreshUI();
+        } else if (message.command === 'togglePlayPause') {
+          player.togglePlayPause();
+          refreshUI();
+        } else if (message.command === 'toggle') {
           vscode.commands.executeCommand('fastTts.togglePermanent');
         } else if (message.command === 'stop') {
           vscode.commands.executeCommand('fastTts.stop');
@@ -384,6 +412,7 @@ function activate(context) {
 function getWebviewContent(cfg, st) {
   const isEnabled = cfg.enabled !== false;
   const isSpeaking = st && st.isSpeaking;
+  const isPaused = st && st.isPaused;
   return `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -415,7 +444,7 @@ function getWebviewContent(cfg, st) {
       font-weight: 600;
       padding: 2px 8px;
       border-radius: 12px;
-      background: ${!isEnabled ? '#dc2626' : isSpeaking ? '#eab308' : '#16a34a'};
+      background: ${!isEnabled ? '#dc2626' : isPaused ? '#3b82f6' : isSpeaking ? '#eab308' : '#16a34a'};
       color: #fff;
     }
     .btn-toggle {
@@ -460,7 +489,7 @@ function getWebviewContent(cfg, st) {
       border: none;
       cursor: pointer;
       font-size: 12px;
-      background: ${isSpeaking ? '#b91c1c' : '#2563eb'};
+      background: ${isSpeaking ? '#eab308' : isPaused ? '#16a34a' : '#2563eb'};
       color: #fff;
       margin-bottom: 6px;
     }
@@ -515,13 +544,13 @@ function getWebviewContent(cfg, st) {
   <div class="panel-card">
     <div class="status-header">
       <span style="font-weight:600;">AI Voice Assistant</span>
-      <span id="badge" class="status-badge">${!isEnabled ? 'MUTED' : isSpeaking ? 'SPEAKING' : 'READY'}</span>
+      <span id="badge" class="status-badge">${!isEnabled ? 'MUTED' : isPaused ? 'PAUSED' : isSpeaking ? 'SPEAKING' : 'READY'}</span>
     </div>
     <button id="btnToggle" class="btn-toggle" onclick="send('toggle')">
       ${isEnabled ? 'Permanently Stop Voice' : 'Re-Enable Voice'}
     </button>
-    <button id="btnMainAction" class="btn-main-action" onclick="send('${isSpeaking ? 'stop' : 'replayLast'}')">
-      ${isSpeaking ? 'Stop Currently Speaking' : 'Replay Last Response'}
+    <button id="btnMainAction" class="btn-main-action" onclick="send('${isSpeaking ? 'pause' : isPaused ? 'resume' : 'replayLast'}')">
+      ${isSpeaking ? 'Pause Currently Speaking' : isPaused ? 'Resume Speech' : 'Replay Last Response'}
     </button>
     <div class="controls-grid">
       <button class="btn-ctrl" onclick="send('prev')" title="Previous response">Prev</button>
