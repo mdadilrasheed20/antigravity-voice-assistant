@@ -1,15 +1,14 @@
 const vscode = require('vscode');
 const fs = require('fs');
 const path = require('path');
-const os = require('os');
-const player = require('./player.js');
+const player = require('C:\\Users\\Adil\\AppData\\Local\\fast-tts\\player.js');
 
 
-const BRAIN_DIR = path.join(os.homedir(), '.gemini', 'antigravity-ide', 'brain');
+const BRAIN_DIR = 'C:\\Users\\Adil\\.gemini\\antigravity-ide\\brain';
 const playedStepKeys = new Set();
 let lastSpokenContent = '';
 
-// Seed existing step keys so historic turns are not spoken on IDE boot
+// Seed existing step keys so we don't speak historic turns on IDE boot
 try {
   if (fs.existsSync(BRAIN_DIR)) {
     const dirs = fs.readdirSync(BRAIN_DIR);
@@ -39,7 +38,32 @@ try {
 } catch (e) {}
 
 
+
+function ensureBackgroundWatcher() {
+  try {
+    const watcherPath = 'C:\\Users\\Adil\\AppData\\Local\\fast-tts\\watcher.js';
+    const pidFile = 'C:\\Users\\Adil\\AppData\\Local\\fast-tts\\watcher.pid';
+    let running = false;
+    if (fs.existsSync(pidFile)) {
+      const p = parseInt(fs.readFileSync(pidFile, 'utf8').trim(), 10);
+      if (p) {
+        try { process.kill(p, 0); running = true; } catch(e) {}
+      }
+    }
+    if (!running && fs.existsSync(watcherPath)) {
+      const cp = require('child_process');
+      const child = cp.spawn('node', [watcherPath], {
+        detached: true,
+        stdio: 'ignore',
+        windowsHide: true
+      });
+      child.unref();
+    }
+  } catch (e) {}
+}
+
 function activate(context) {
+  ensureBackgroundWatcher();
   // Status Bar: Toggle Voice ON/OFF (Permanent mute)
   const barToggle = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 105);
   barToggle.command = 'fastTts.togglePermanent';
@@ -163,10 +187,10 @@ function activate(context) {
                   if (!playedStepKeys.has(key)) {
                     playedStepKeys.add(key);
 
+                    // Check deduplication with lastSpokenContent
                     const clean = obj.content.trim();
                     if (clean !== lastSpokenContent) {
                       lastSpokenContent = clean;
-                      // Enqueue sequentially so chats never cut each other off!
                       player.enqueueSpeech(clean, cfg.voice, cfg.rate);
                       refreshUI();
                     }
