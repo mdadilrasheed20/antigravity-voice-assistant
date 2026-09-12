@@ -46,13 +46,13 @@ function cleanTextForSpeech(raw) {
 
   // 6. Normalize Windows file paths with backslashes
   // e.g. C:\Users\Adil\antigravity-voice-assistant\ -> antigravity-voice-assistant
-  // e.g. c:\CRA -> CRA
+  // e.g. C:\Projects\MyApp -> MyApp
   text = text.replace(/[A-Za-z]:\\[^\s\r\n\(\)\[\]"'`*]+/g, (match) => {
     const parts = match.replace(/\\+$/, '').split('\\').filter(Boolean);
     return parts.length > 0 ? parts[parts.length - 1] : '';
   });
 
-  // 7. Normalize Unix file paths: e.g. src/frontend/AWB/Default.html -> Default.html
+  // 7. Normalize Unix file paths: e.g. src/components/App.html -> App.html
   text = text.replace(/(?:[\w.-]+\/)+([\w.-]+)/g, '$1');
 
   // 8. Remove ALL hashtags / hashes (#) everywhere so SpeechSynthesizer never says 'number number number'
