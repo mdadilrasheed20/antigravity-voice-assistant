@@ -83,15 +83,15 @@ function activate(context) {
   // Status Bar: Prev button
   const barPrev = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 103);
   barPrev.command = 'fastTts.prev';
-  barPrev.text = '$(chevron-left) Prev';
-  barPrev.tooltip = 'Replay previous spoken response';
+  barPrev.text = '$(chevron-left) Prev Line';
+  barPrev.tooltip = 'Skip backward to previous line in current response';
   context.subscriptions.push(barPrev);
 
   // Status Bar: Next button
   const barNext = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 102);
   barNext.command = 'fastTts.next';
-  barNext.text = '$(chevron-right) Next';
-  barNext.tooltip = 'Skip to next spoken response';
+  barNext.text = '$(chevron-right) Next Line';
+  barNext.tooltip = 'Skip forward to next line in current response';
   context.subscriptions.push(barNext);
 
   // Status Bar: Settings button
@@ -271,45 +271,21 @@ function activate(context) {
   }));
 
   context.subscriptions.push(vscode.commands.registerCommand('fastTts.prev', () => {
-    const cfg = player.loadConfig();
-    if (!cfg.history || cfg.history.length === 0) {
-      vscode.window.showInformationMessage('No speech history.');
-      return;
-    }
-    if (typeof cfg.currentIndex !== 'number' || cfg.currentIndex < 0) {
-      cfg.currentIndex = cfg.history.length - 1;
-    }
-    if (cfg.currentIndex > 0) {
-      cfg.currentIndex--;
-      player.saveConfig(cfg);
-      const item = cfg.history[cfg.currentIndex];
-      vscode.window.showInformationMessage('Previous (' + (cfg.currentIndex + 1) + '/' + cfg.history.length + '): "' + item.text.substring(0, 40) + '..."');
-      lastSpokenContent = item.text.trim();
-      player.playDirect(item.text, cfg.voice, cfg.rate);
+    const res = player.prevLine();
+    if (res && res.text) {
+      vscode.window.showInformationMessage('Line (' + (res.index + 1) + '/' + res.total + '): "' + res.text.substring(0, 45) + '..."');
     } else {
-      vscode.window.showInformationMessage('Already at the oldest recorded response.');
+      vscode.window.showInformationMessage('Already at the start of current response.');
     }
     refreshUI();
   }));
 
   context.subscriptions.push(vscode.commands.registerCommand('fastTts.next', () => {
-    const cfg = player.loadConfig();
-    if (!cfg.history || cfg.history.length === 0) {
-      vscode.window.showInformationMessage('No speech history.');
-      return;
-    }
-    if (typeof cfg.currentIndex !== 'number' || cfg.currentIndex < 0) {
-      cfg.currentIndex = cfg.history.length - 1;
-    }
-    if (cfg.currentIndex < cfg.history.length - 1) {
-      cfg.currentIndex++;
-      player.saveConfig(cfg);
-      const item = cfg.history[cfg.currentIndex];
-      vscode.window.showInformationMessage('Next (' + (cfg.currentIndex + 1) + '/' + cfg.history.length + '): "' + item.text.substring(0, 40) + '..."');
-      lastSpokenContent = item.text.trim();
-      player.playDirect(item.text, cfg.voice, cfg.rate);
+    const res = player.nextLine();
+    if (res && res.text) {
+      vscode.window.showInformationMessage('Line (' + (res.index + 1) + '/' + res.total + '): "' + res.text.substring(0, 45) + '..."');
     } else {
-      vscode.window.showInformationMessage('Already at the latest recorded response.');
+      vscode.window.showInformationMessage('Already at the end of current response.');
     }
     refreshUI();
   }));
@@ -549,9 +525,9 @@ function getWebviewContent(cfg, st) {
       ${isSpeaking ? 'Pause Currently Speaking' : isPaused ? 'Resume Speech' : 'Replay Last Response'}
     </button>
     <div class="controls-grid">
-      <button class="btn-ctrl" onclick="send('prev')" title="Previous response">Prev</button>
+      <button class="btn-ctrl" onclick="send('prev')" title="Previous line in current response">Prev Line</button>
       <button class="btn-ctrl" onclick="send('stop')" title="Stop now">Stop</button>
-      <button class="btn-ctrl" onclick="send('next')" title="Next response">Next</button>
+      <button class="btn-ctrl" onclick="send('next')" title="Next line in current response">Next Line</button>
     </div>
   </div>
 

@@ -13,6 +13,10 @@ public class SpeechWorker {
             }
         };
 
+                s.SpeakProgress += (sender, e) => {
+            Console.WriteLine("PROGRESS:" + e.CharacterPosition);
+        };
+
         Console.WriteLine("EVENT:READY");
 
         string line;

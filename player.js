@@ -17,6 +17,44 @@ let lastHandledCmdTime = Date.now();
 
 const PS_EXE = 'C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe';
 
+
+let currentLines = [];
+let currentLineIndex = 0;
+let currentLineOffsets = [];
+let currentVoice = 'Zira';
+let currentRate = 1;
+
+function splitIntoLines(text) {
+  if (!text || typeof text !== 'string') return [];
+  const rawParagraphs = text.split(/\r?\n+/);
+  const result = [];
+  
+  for (const p of rawParagraphs) {
+    const trimmed = p.trim();
+    if (!trimmed) continue;
+    
+    if (trimmed.length < 160) {
+      result.push(trimmed);
+      continue;
+    }
+    
+    const sentences = trimmed.split(/(?<=[.?!])\s+(?=[A-Z])/);
+    let buf = '';
+    for (const s of sentences) {
+      const st = s.trim();
+      if (!st) continue;
+      if (buf && (buf.length + st.length < 120)) {
+        buf += ' ' + st;
+      } else {
+        if (buf) result.push(buf);
+        buf = st;
+      }
+    }
+    if (buf) result.push(buf);
+  }
+  return result.length > 0 ? result : [text.trim()];
+}
+
 function cleanTextForSpeech(raw) {
   if (!raw || typeof raw !== 'string') return '';
   let text = raw;
@@ -117,7 +155,7 @@ function loadState() {
   return { isSpeaking: false, isPaused: false, currentText: '', activePid: null, queueLength: 0 };
 }
 
-function updateState(isSpeaking, isPaused = false, currentText = '', activePid = null) {
+function updateState(isSpeaking, isPaused = false, currentText = '', activePid = null, lineIdx = currentLineIndex, totalL = (currentLines ? currentLines.length : 0)) {
   try {
     fs.writeFileSync(STATE_PATH, JSON.stringify({
       isSpeaking,
@@ -125,6 +163,8 @@ function updateState(isSpeaking, isPaused = false, currentText = '', activePid =
       currentText,
       activePid,
       queueLength: queue.length,
+      currentLineIndex: lineIdx,
+      totalLines: totalL,
       timestamp: Date.now()
     }, null, 2), 'utf8');
   } catch (e) {}
@@ -165,6 +205,10 @@ public class SpeechWorker {
             if (!e.Cancelled) {
                 Console.WriteLine("EVENT:DONE");
             }
+        };
+
+                s.SpeakProgress += (sender, e) => {
+            Console.WriteLine("PROGRESS:" + e.CharacterPosition);
         };
 
         Console.WriteLine("EVENT:READY");
@@ -232,6 +276,8 @@ function _ensureIpcServer() {
       if (cmd === 'PAUSE') _localPause();
       else if (cmd === 'RESUME') _localResume();
       else if (cmd === 'STOP') _localStop();
+      else if (cmd === 'NEXT') _localNextLine();
+      else if (cmd === 'PREV') _localPrevLine();
       res.writeHead(200, { 'Content-Type': 'text/plain' });
       res.end('OK');
     });
@@ -253,6 +299,8 @@ function _ensureCmdWatcher() {
           if (data.command === 'PAUSE') _localPause();
           else if (data.command === 'RESUME') _localResume();
           else if (data.command === 'STOP') _localStop();
+          else if (data.command === 'NEXT') _localNextLine();
+          else if (data.command === 'PREV') _localPrevLine();
         }
       }
     } catch(e) {}
@@ -321,8 +369,21 @@ function ensureWorker() {
       const lines = buf.toString('utf8').trim().split('\n');
       for (const line of lines) {
         const l = line.trim();
-        if (l === 'STATE:SPEAKING') {
-          updateState(true, false, activeText, pid);
+        if (l.startsWith('PROGRESS:')) {
+          const charPos = parseInt(l.substring(9), 10);
+          if (!isNaN(charPos) && currentLineOffsets.length > 0) {
+            for (let i = currentLineOffsets.length - 1; i >= 0; i--) {
+              if (charPos >= currentLineOffsets[i].offset) {
+                if (currentLineIndex !== currentLineOffsets[i].index) {
+                  currentLineIndex = currentLineOffsets[i].index;
+                  updateState(true, false, currentLines[currentLineIndex] || activeText, pid, currentLineIndex, currentLines.length);
+                }
+                break;
+              }
+            }
+          }
+        } else if (l === 'STATE:SPEAKING') {
+          updateState(true, false, currentLines[currentLineIndex] || activeText, pid, currentLineIndex, currentLines.length);
         } else if (l === 'STATE:PAUSED') {
           updateState(false, true, activeText, pid);
         } else if (l === 'STATE:STOPPED' || l === 'EVENT:DONE') {
@@ -381,11 +442,22 @@ function _startPlayback(spokenText, voiceName, rate) {
     }
 
     currentResolve = resolve;
-    activeText = spokenText;
+    currentLines = splitIntoLines(spokenText);
+    currentLineIndex = 0;
+    currentVoice = voiceName || 'Zira';
+    currentRate = typeof rate === 'number' ? rate : 1;
 
     const cfg = loadConfig();
     const voice = voiceName || cfg.voice || 'Zira';
     const spd = typeof rate === 'number' ? rate : (cfg.rate || 1);
+
+    currentLineOffsets = [];
+    let curOffset = 0;
+    for (let i = 0; i < currentLines.length; i++) {
+      currentLineOffsets.push({ index: i, offset: curOffset });
+      curOffset += currentLines[i].length + 1;
+    }
+    activeText = spokenText;
 
     try {
       workerProcess.stdin.write('VOICE:' + voice + '\n');
@@ -409,6 +481,113 @@ function _playNextInQueue() {
   _startPlayback(next.text, next.voice, next.rate).then((res) => {
     if (next.resolve) next.resolve(res);
   });
+}
+
+
+function _localNextLine() {
+  if (currentLines.length === 0) {
+    const cfg = loadConfig();
+    if (cfg.history && cfg.history.length > 0) {
+      const last = cfg.history[cfg.history.length - 1];
+      currentLines = splitIntoLines(cleanTextForSpeech(last.text));
+      currentLineIndex = 0;
+      currentVoice = last.voice || 'Zira';
+      currentRate = last.rate || 1;
+    } else {
+      return null;
+    }
+  }
+
+  if (currentLineIndex < currentLines.length - 1) {
+    currentLineIndex++;
+  } else {
+    return { index: currentLineIndex, total: currentLines.length, text: currentLines[currentLineIndex], atEnd: true };
+  }
+
+  ensureWorker();
+  if (workerProcess && workerProcess.stdin) {
+    try { workerProcess.stdin.write('STOP\n'); } catch (e) {}
+  }
+
+  const remainingText = currentLines.slice(currentLineIndex).join('\n');
+  currentLineOffsets = [];
+  let off = 0;
+  for (let i = currentLineIndex; i < currentLines.length; i++) {
+    currentLineOffsets.push({ index: i, offset: off });
+    off += currentLines[i].length + 1;
+  }
+  activeText = remainingText;
+
+  if (workerProcess && workerProcess.stdin) {
+    try {
+      workerProcess.stdin.write('VOICE:' + currentVoice + '\n');
+      workerProcess.stdin.write('RATE:' + currentRate + '\n');
+      const b64 = Buffer.from(remainingText, 'utf8').toString('base64');
+      workerProcess.stdin.write('SPEAK_B64:' + b64 + '\n');
+      updateState(true, false, currentLines[currentLineIndex], workerProcess.pid, currentLineIndex, currentLines.length);
+    } catch (e) {}
+  }
+
+  return { index: currentLineIndex, total: currentLines.length, text: currentLines[currentLineIndex] };
+}
+
+function _localPrevLine() {
+  if (currentLines.length === 0) {
+    const cfg = loadConfig();
+    if (cfg.history && cfg.history.length > 0) {
+      const last = cfg.history[cfg.history.length - 1];
+      currentLines = splitIntoLines(cleanTextForSpeech(last.text));
+      currentLineIndex = 0;
+      currentVoice = last.voice || 'Zira';
+      currentRate = last.rate || 1;
+    } else {
+      return null;
+    }
+  }
+
+  if (currentLineIndex > 0) {
+    currentLineIndex--;
+  } else {
+    currentLineIndex = 0;
+  }
+
+  ensureWorker();
+  if (workerProcess && workerProcess.stdin) {
+    try { workerProcess.stdin.write('STOP\n'); } catch (e) {}
+  }
+
+  const remainingText = currentLines.slice(currentLineIndex).join('\n');
+  currentLineOffsets = [];
+  let off = 0;
+  for (let i = currentLineIndex; i < currentLines.length; i++) {
+    currentLineOffsets.push({ index: i, offset: off });
+    off += currentLines[i].length + 1;
+  }
+  activeText = remainingText;
+
+  if (workerProcess && workerProcess.stdin) {
+    try {
+      workerProcess.stdin.write('VOICE:' + currentVoice + '\n');
+      workerProcess.stdin.write('RATE:' + currentRate + '\n');
+      const b64 = Buffer.from(remainingText, 'utf8').toString('base64');
+      workerProcess.stdin.write('SPEAK_B64:' + b64 + '\n');
+      updateState(true, false, currentLines[currentLineIndex], workerProcess.pid, currentLineIndex, currentLines.length);
+    } catch (e) {}
+  }
+
+  return { index: currentLineIndex, total: currentLines.length, text: currentLines[currentLineIndex] };
+}
+
+function nextLine() {
+  const res = _localNextLine();
+  _broadcastCommand('NEXT');
+  return res;
+}
+
+function prevLine() {
+  const res = _localPrevLine();
+  _broadcastCommand('PREV');
+  return res;
 }
 
 // Pause active speech right where it is
@@ -500,6 +679,7 @@ function enqueueSpeech(text, voiceName, rate) {
 
 module.exports = {
   cleanTextForSpeech,
+  splitIntoLines,
   loadConfig,
   saveConfig,
   loadState,
@@ -509,5 +689,7 @@ module.exports = {
   togglePlayPause,
   stop,
   playDirect,
-  enqueueSpeech
+  enqueueSpeech,
+  nextLine,
+  prevLine
 };
