@@ -202,8 +202,7 @@ function activate(context) {
                 const obj = JSON.parse(line);
                 if (obj.type === 'PLANNER_RESPONSE' && obj.content && obj.content.trim()) {
                   const key = d + ':' + obj.step_index;
-                  if (!playedStepKeys.has(key) && !hasStepBeenPlayedGlobal(key)) {
-                    recordPlayedStepGlobal(key);
+                  if (!playedStepKeys.has(key)) {
                     playedStepKeys.add(key);
 
                     const clean = obj.content.trim();

@@ -399,7 +399,12 @@ function enqueueSpeech(text, voiceName, rate) {
     saveConfig(cfg);
 
     const st = loadState();
-    if (st.isSpeaking || st.isPaused) {
+    if (st.isPaused) {
+      stop();
+      _startPlayback(spokenText, voice, spd).then(resolve);
+      return;
+    }
+    if (st.isSpeaking) {
       queue.push({ text: spokenText, voice, rate: spd, resolve });
     } else {
       _startPlayback(spokenText, voice, spd).then(resolve);
