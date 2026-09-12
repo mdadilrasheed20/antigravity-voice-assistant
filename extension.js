@@ -85,9 +85,16 @@ function activate(context) {
   barToggle.command = 'fastTts.togglePermanent';
   context.subscriptions.push(barToggle);
 
-  // Status Bar: Dynamic Replay / Stop button
+  // Status Bar: Dynamic Pause / Resume / Play button
   const barAction = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 104);
   context.subscriptions.push(barAction);
+
+  // Status Bar: Dedicated Stop button
+  const barStop = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 103.5);
+  barStop.command = 'fastTts.stop';
+  barStop.text = '$(primitive-square) Stop';
+  barStop.tooltip = 'Stop and cancel spoken audio';
+  context.subscriptions.push(barStop);
 
   // Status Bar: Prev button
   const barPrev = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 103);
@@ -125,15 +132,23 @@ function activate(context) {
     }
 
     if (st.isSpeaking) {
-      barAction.text = '$(primitive-square) Stop Voice';
-      barAction.tooltip = 'Voice is speaking right now. Click to STOP audio immediately.';
-      barAction.backgroundColor = new vscode.ThemeColor('statusBarItem.errorBackground');
-      barAction.command = 'fastTts.stop';
+      barAction.text = '$(debug-pause) Pause';
+      barAction.tooltip = 'Voice is speaking right now. Click to PAUSE speech immediately.';
+      barAction.backgroundColor = new vscode.ThemeColor('statusBarItem.warningBackground');
+      barAction.command = 'fastTts.pause';
+      if (typeof barStop !== 'undefined') barStop.show();
+    } else if (st.isPaused) {
+      barAction.text = '$(play) Resume';
+      barAction.tooltip = 'Voice is paused. Click to RESUME speech from where it was paused.';
+      barAction.backgroundColor = new vscode.ThemeColor('statusBarItem.prominentBackground');
+      barAction.command = 'fastTts.resume';
+      if (typeof barStop !== 'undefined') barStop.show();
     } else {
-      barAction.text = '$(play) Replay';
+      barAction.text = '$(play) Play';
       barAction.tooltip = 'Click to replay the last spoken assistant response.';
       barAction.backgroundColor = undefined;
       barAction.command = 'fastTts.replayLast';
+      if (typeof barStop !== 'undefined') barStop.hide();
     }
 
     barSettings.text = '$(gear) ' + (cfg.voice || 'Zira') + ' (' + (cfg.rate >= 0 ? '+' : '') + (cfg.rate || 1) + ')';
