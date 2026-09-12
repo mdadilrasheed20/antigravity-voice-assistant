@@ -1,62 +1,10 @@
+const net = require('net');
 const vscode = require('vscode');
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
 const player = require('./player.js');
 
-
-const LOCK_FILE = 'C:\\Users\\Adil\\AppData\\Local\\fast-tts\\watcher.lock';
-const PLAYED_STEPS_PATH = 'C:\\Users\\Adil\\AppData\\Local\\fast-tts\\played_steps.json';
-
-function isWatcherLeader() {
-  const now = Date.now();
-  try {
-    if (fs.existsSync(LOCK_FILE)) {
-      const data = JSON.parse(fs.readFileSync(LOCK_FILE, 'utf8'));
-      if (data && data.pid === process.pid) {
-        fs.writeFileSync(LOCK_FILE, JSON.stringify({ pid: process.pid, time: now }), 'utf8');
-        return true;
-      }
-      if (data && data.time && (now - data.time) < 2500) {
-        try {
-          process.kill(data.pid, 0);
-          return false; // Active leader is running! Stay follower.
-        } catch (e) {
-          // Dead leader
-        }
-      }
-    }
-    fs.writeFileSync(LOCK_FILE, JSON.stringify({ pid: process.pid, time: now }), 'utf8');
-    return true;
-  } catch (e) {
-    return true;
-  }
-}
-
-function hasStepBeenPlayedGlobal(key) {
-  try {
-    if (fs.existsSync(PLAYED_STEPS_PATH)) {
-      const list = JSON.parse(fs.readFileSync(PLAYED_STEPS_PATH, 'utf8'));
-      if (Array.isArray(list) && list.includes(key)) return true;
-    }
-  } catch (e) {}
-  return false;
-}
-
-function recordPlayedStepGlobal(key) {
-  try {
-    let list = [];
-    if (fs.existsSync(PLAYED_STEPS_PATH)) {
-      list = JSON.parse(fs.readFileSync(PLAYED_STEPS_PATH, 'utf8'));
-      if (!Array.isArray(list)) list = [];
-    }
-    if (!list.includes(key)) {
-      list.push(key);
-      if (list.length > 200) list = list.slice(-200);
-      fs.writeFileSync(PLAYED_STEPS_PATH, JSON.stringify(list), 'utf8');
-    }
-  } catch (e) {}
-}
 
 const BRAIN_DIR = path.join(os.homedir(), '.gemini', 'antigravity-ide', 'brain');
 const playedStepKeys = new Set();
@@ -91,7 +39,47 @@ try {
   }
 } catch (e) {}
 
+
+// TCP Mutex Port: Guarantees ONLY ONE IDE Window acts as Master Audio Watcher
+const MUTEX_PORT = 19842;
+let isMasterWatcher = false;
+let masterServer = null;
+
+function setupMasterElection() {
+  if (isMasterWatcher) return;
+
+  const server = net.createServer((socket) => {
+    socket.on('data', (buf) => {
+      const cmd = buf.toString('utf8').trim();
+      if (cmd === 'STOP') player.stop();
+    });
+  });
+
+  server.once('error', (err) => {
+    if (err.code === 'EADDRINUSE') {
+      // Another IDE window is already the Master! We stay follower.
+      isMasterWatcher = false;
+      masterServer = null;
+    }
+  });
+
+  server.once('listening', () => {
+    isMasterWatcher = true;
+    masterServer = server;
+    console.log('[fast-tts] Master Audio Watcher active on port ' + MUTEX_PORT);
+  });
+
+  server.listen(MUTEX_PORT, '127.0.0.1');
+}
+
 function activate(context) {
+  // Start Master election on IDE startup
+  setupMasterElection();
+  const retryElection = setInterval(() => {
+    if (!isMasterWatcher) setupMasterElection();
+  }, 2500);
+  context.subscriptions.push({ dispose: () => clearInterval(retryElection) });
+
   // Status Bar: Toggle Voice ON/OFF (Permanent mute)
   const barToggle = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 105);
   barToggle.command = 'fastTts.togglePermanent';
@@ -170,7 +158,8 @@ function activate(context) {
 
   // Watch for completed model responses across ALL chats in the IDE!
   function pollTranscriptsForNewResponses() {
-    if (!isWatcherLeader()) return;
+    // ONLY the single Master IDE Window polls transcripts!
+    if (!isMasterWatcher) return;
     const cfg = player.loadConfig();
     if (cfg.enabled === false) return;
 
@@ -617,6 +606,10 @@ function getWebviewContent(cfg, st) {
 }
 
 function deactivate() {
+  if (masterServer) {
+    try { masterServer.close(); } catch (e) {}
+    masterServer = null;
+  }
   player.stop();
 }
 
