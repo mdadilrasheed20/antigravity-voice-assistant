@@ -8,7 +8,9 @@ public class SpeechWorker {
 
     public static void Run() {
         s.SpeakCompleted += (sender, e) => {
-            Console.WriteLine("EVENT:DONE");
+            if (!e.Cancelled) {
+                Console.WriteLine("EVENT:DONE");
+            }
         };
 
         Console.WriteLine("EVENT:READY");

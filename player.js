@@ -13,7 +13,7 @@ const CMD_PATH = path.join(DIR, 'cmd.json');
 const IPC_PORT = 19844;
 let ipcServer = null;
 let cmdWatcherInterval = null;
-let lastHandledCmdTime = 0;
+let lastHandledCmdTime = Date.now();
 
 const PS_EXE = 'C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe';
 
@@ -162,7 +162,9 @@ public class SpeechWorker {
 
     public static void Run() {
         s.SpeakCompleted += (sender, e) => {
-            Console.WriteLine("EVENT:DONE");
+            if (!e.Cancelled) {
+                Console.WriteLine("EVENT:DONE");
+            }
         };
 
         Console.WriteLine("EVENT:READY");
@@ -219,7 +221,14 @@ function _ensureIpcServer() {
   try {
     const http = require('http');
     ipcServer = http.createServer((req, res) => {
-      const cmd = req.url.replace('/', '').toUpperCase();
+      const u = new URL(req.url, 'http://127.0.0.1');
+      const cmd = u.pathname.replace('/', '').toUpperCase();
+      const senderPid = parseInt(u.searchParams.get('senderPid'), 10);
+      if (senderPid && senderPid === process.pid) {
+        res.writeHead(200, { 'Content-Type': 'text/plain' });
+        res.end('IGNORED_SELF');
+        return;
+      }
       if (cmd === 'PAUSE') _localPause();
       else if (cmd === 'RESUME') _localResume();
       else if (cmd === 'STOP') _localStop();
@@ -233,10 +242,12 @@ function _ensureIpcServer() {
 
 function _ensureCmdWatcher() {
   if (cmdWatcherInterval) return;
+  lastHandledCmdTime = Date.now();
   cmdWatcherInterval = setInterval(() => {
     try {
       if (fs.existsSync(CMD_PATH)) {
         const data = JSON.parse(fs.readFileSync(CMD_PATH, 'utf8'));
+        if (data && data.senderPid === process.pid) return;
         if (data && data.time && data.time > lastHandledCmdTime) {
           lastHandledCmdTime = data.time;
           if (data.command === 'PAUSE') _localPause();
@@ -277,12 +288,12 @@ function _broadcastCommand(cmd) {
   const now = Date.now();
   lastHandledCmdTime = now;
   try {
-    fs.writeFileSync(CMD_PATH, JSON.stringify({ command: cmd, time: now }), 'utf8');
+    fs.writeFileSync(CMD_PATH, JSON.stringify({ command: cmd, time: now, senderPid: process.pid }), 'utf8');
   } catch (e) {}
 
   try {
     const http = require('http');
-    const req = http.get('http://127.0.0.1:' + IPC_PORT + '/' + cmd.toLowerCase(), () => {});
+    const req = http.get('http://127.0.0.1:' + IPC_PORT + '/' + cmd.toLowerCase() + '?senderPid=' + process.pid, () => {});
     req.on('error', () => {});
     req.setTimeout(250, () => req.destroy());
   } catch (e) {}
