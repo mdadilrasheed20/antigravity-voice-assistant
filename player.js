@@ -20,76 +20,78 @@ const PS_EXE = 'C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe';
  * Strips headers, URLs, links, emojis, long code blocks, and markdown noise.
  */
 function cleanTextForSpeech(raw) {
-  if (!raw) return '';
-
+  if (!raw || typeof raw !== 'string') return '';
   let text = raw;
 
-  // 1. Remove XML/HTML tags
-  text = text.replace(/<[^>]+>/g, ' ');
-
-  // 2. Format fenced code blocks (replace long code with natural phrase)
-  text = text.replace(/\`\`\`[\s\S]*?\`\`\`/g, (match) => {
-    const inner = match.replace(/^\`\`\`[a-zA-Z0-9_\-\+]*\r?\n?/, '').replace(/\r?\n?\`\`\`$/, '').trim();
-    const lines = inner.split(/\r?\n/);
-    if (lines.length <= 2 && inner.length < 80) {
+  // 1. Code blocks: summarize long blocks
+  text = text.replace(/```[\s\S]*?```/g, (match) => {
+    const inner = match.replace(/^```[a-zA-Z0-9_\-\+]*\r?\n?/, '').replace(/\r?\n?```$/, '').trim();
+    if (inner.split(/\r?\n/).length <= 2 && inner.length < 60) {
       return ' ' + inner + '. ';
     }
     return ' as shown in the code snippet. ';
   });
 
-  // 3. Format markdown links: [Display Text](url) -> Display Text
-  text = text.replace(/\[([^\]]+)\]\([^\)]+\)/g, '$1');
+  // 2. Strip HTML tags: <tag ...>
+  text = text.replace(/<[^>]+>/g, ' ');
+
+  // 3. Format markdown links & images: [Display Text](url) or ![alt](url) -> Display Text
+  text = text.replace(/!?\[([^\]]*)\]\([^)]+\)/g, '$1');
 
   // 4. Remove raw URLs and file URIs: file:///..., http://..., https://...
-  text = text.replace(/(?:file:\/\/\/|https?:\/\/)[^\s\)\>]+/g, '');
+  text = text.replace(/(?:file:\/\/\/|https?:\/\/)[^\s)>]+/gi, ' ');
 
-  // 5. Clean up markdown headers: # Header -> Header.
-  text = text.replace(/^#{1,6}\s*(.+)$/gm, '$1. ');
+  // 5. Clean C# to C Sharp
+  text = text.replace(/\bC#\b/g, 'C Sharp');
 
-  // 6. Clean up bold, italics, strikethrough: **text**, *text*, ~~text~~
-  text = text.replace(/\*\*([^*]+)\*\*/g, '$1');
-  text = text.replace(/\*([^*]+)\*/g, '$1');
-  text = text.replace(/__([^_]+)__/g, '$1');
-  text = text.replace(/_([^_]+)_/g, '$1');
-  text = text.replace(/~~([^~]+)~~/g, '$1');
-
-  // 7. Clean up inline backticks: `code` -> code
-  text = text.replace(/\`([^\`]+)\`/g, '$1');
-
-  // 8. Clean up markdown table rows: | col 1 | col 2 |
-  text = text.replace(/^\|.*\|$/gm, (match) => {
-    if (/^\|[\s\-:]+\|$/.test(match.trim())) return '';
-    const cells = match.split('|').map(c => c.trim()).filter(Boolean);
-    return cells.join(', ') + '. ';
+  // 6. Normalize Windows file paths with backslashes
+  // e.g. C:\Users\Adil\antigravity-voice-assistant\ -> antigravity-voice-assistant
+  // e.g. c:\CRA -> CRA
+  text = text.replace(/[A-Za-z]:\\[^\s\r\n\(\)\[\]"'`*]+/g, (match) => {
+    const parts = match.replace(/\\+$/, '').split('\\').filter(Boolean);
+    return parts.length > 0 ? parts[parts.length - 1] : '';
   });
 
-  // 9. Clean up blockquotes: > text
-  text = text.replace(/^\s*>\s*/gm, '');
+  // 7. Normalize Unix file paths: e.g. src/frontend/AWB/Default.html -> Default.html
+  text = text.replace(/(?:[\w.-]+\/)+([\w.-]+)/g, '$1');
 
-  // 10. Clean up horizontal rules: ---, ***, ___
-  text = text.replace(/^[\s\-_*]{3,}$/gm, '');
+  // 8. Remove ALL hashtags / hashes (#) everywhere so SpeechSynthesizer never says 'number number number'
+  text = text.replace(/#+/g, '');
 
-  // 11. Clean up bullet points: - item, * item, + item, 1. item
-  text = text.replace(/^[\s]*[-*+]\s+/gm, '');
-  text = text.replace(/^[\s]*\d+\.\s+/gm, '');
-
-  // 12. Remove decorative emojis
+  // 9. Remove decorative emojis
   text = text.replace(/[\u{1F300}-\u{1F9FF}\u{2600}-\u{26FF}\u{2700}-\u{27BF}\u{1F1E6}-\u{1F1FF}\u{1F680}-\u{1F6FF}\u{1F900}-\u{1F9FF}]/gu, '');
 
-  // 13. Normalize keyboard shortcuts: Ctrl + Shift + P -> Control Shift P
+  // 10. Normalize keyboard shortcuts
   text = text.replace(/Ctrl\s*\+\s*Shift\s*\+\s*P/gi, 'Control Shift P');
   text = text.replace(/Ctrl\s*\+\s*([A-Za-z0-9])/gi, 'Control $1');
+  text = text.replace(/Alt\s*\+\s*([A-Za-z0-9])/gi, 'Alt $1');
 
-  // 14. Simplify long Windows file paths in text (C:\path\to\file.ext -> file dot ext)
-  text = text.replace(/[A-Za-z]:\\[\w\\\.-]+\\([\w\.-]+)/g, '$1');
+  // 11. Clean up markdown bold, italics, strikethrough, backticks
+  text = text.replace(/[*_~`]/g, ' ');
 
-  // 15. Convert file extensions for natural speaking: .js -> dot js, .json -> dot JSON
-  text = text.replace(/\.([a-zA-Z0-9]{2,5})\b/g, ' dot $1');
+  // 12. Shorten git commit hex hashes (e.g. acbe0d8 or 40-char hashes) to avoid spelling hex chars
+  text = text.replace(/\b[0-9a-f]{7,40}\b/gi, 'commit');
 
-  // 16. Clean up multiple dots, colons, newlines, and extra whitespace
-  text = text.replace(/:\s*(\.|\n)/g, '. ');
-  text = text.replace(/\.{2,}/g, '.');
+  // 13. Remove remaining backslashes completely so 'backslash' is never spoken!
+  text = text.replace(/\\+/g, ' ');
+
+  // 14. Convert file extensions for natural pronunciation
+  text = text.replace(/\.js\b/gi, ' JS');
+  text = text.replace(/\.ts\b/gi, ' TypeScript');
+  text = text.replace(/\.json\b/gi, ' JSON');
+  text = text.replace(/\.html\b/gi, ' HTML');
+  text = text.replace(/\.aspx\b/gi, ' ASPX');
+  text = text.replace(/\.cs\b/gi, ' C Sharp');
+  text = text.replace(/\.md\b/gi, ' markdown');
+
+  // 15. Clean up list bullets, table bars, dividers
+  text = text.replace(/^[ \t]*[-*+][ \t]+/gm, '');
+  text = text.replace(/\|/g, ' ');
+  text = text.replace(/---+/g, ' ');
+
+  // 16. Clean up whitespace and punctuation
   text = text.replace(/\s+/g, ' ').trim();
+  text = text.replace(/\s+([.,;:?!])/g, '$1');
 
   return text;
 }
