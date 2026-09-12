@@ -150,66 +150,67 @@ let currentResolve = null;
 let activeText = '';
 const queue = [];
 
-const PS_WORKER_SCRIPT = `
-Add-Type -AssemblyName System.Speech
-$s = New-Object System.Speech.Synthesis.SpeechSynthesizer
-$s.SelectVoice('Microsoft Zira Desktop')
-$s.Rate = 1
+const WORKER_PS1 = path.join(DIR, 'worker.ps1');
 
-Register-ObjectEvent -InputObject $s -EventName SpeakCompleted -Action {
-  [Console]::WriteLine("EVENT:DONE")
-} | Out-Null
+const WORKER_SCRIPT = `Add-Type -ReferencedAssemblies 'System.Speech' -TypeDefinition @'
+using System;
+using System.Text;
+using System.Speech.Synthesis;
 
-[Console]::WriteLine("EVENT:READY")
+public class SpeechWorker {
+    private static SpeechSynthesizer s = new SpeechSynthesizer();
 
-while ($line = [Console]::ReadLine()) {
-  if ($line.StartsWith("SPEAK_B64:")) {
-    try {
-      $b64 = $line.Substring(10)
-      $bytes = [System.Convert]::FromBase64String($b64)
-      $text = [System.Text.Encoding]::UTF8.GetString($bytes)
-      $s.SpeakAsyncCancelAll()
-      $s.SpeakAsync($text) | Out-Null
-      [Console]::WriteLine("STATE:SPEAKING")
-    } catch {
-      [Console]::WriteLine("ERROR:" + $_.Exception.Message)
+    public static void Run() {
+        s.SpeakCompleted += (sender, e) => {
+            Console.WriteLine("EVENT:DONE");
+        };
+
+        Console.WriteLine("EVENT:READY");
+
+        string line;
+        while ((line = Console.ReadLine()) != null) {
+            line = line.Trim();
+            if (line.StartsWith("SPEAK_B64:")) {
+                try {
+                    string b64 = line.Substring(10);
+                    byte[] bytes = Convert.FromBase64String(b64);
+                    string text = Encoding.UTF8.GetString(bytes);
+                    s.SpeakAsyncCancelAll();
+                    s.SpeakAsync(text);
+                    Console.WriteLine("STATE:SPEAKING");
+                } catch (Exception ex) {
+                    Console.WriteLine("ERROR:" + ex.Message);
+                }
+            } else if (line.StartsWith("VOICE:")) {
+                string v = line.Substring(6).Trim().ToLower();
+                if (v.Contains("david")) s.SelectVoice("Microsoft David Desktop");
+                else if (v.Contains("hazel")) s.SelectVoice("Microsoft Hazel Desktop");
+                else s.SelectVoice("Microsoft Zira Desktop");
+            } else if (line.StartsWith("RATE:")) {
+                int r;
+                if (int.TryParse(line.Substring(5).Trim(), out r)) s.Rate = r;
+            } else if (line == "PAUSE") {
+                if (s.State == SynthesizerState.Speaking) {
+                    s.Pause();
+                    Console.WriteLine("STATE:PAUSED");
+                }
+            } else if (line == "RESUME") {
+                if (s.State == SynthesizerState.Paused) {
+                    s.Resume();
+                    Console.WriteLine("STATE:SPEAKING");
+                }
+            } else if (line == "STOP") {
+                s.SpeakAsyncCancelAll();
+                Console.WriteLine("STATE:STOPPED");
+            } else if (line == "EXIT") {
+                break;
+            }
+        }
     }
-  }
-  elseif ($line.StartsWith("VOICE:")) {
-    $v = $line.Substring(6).Trim().ToLower()
-    if ($v.Contains('david')) {
-      $s.SelectVoice('Microsoft David Desktop')
-    } elseif ($v.Contains('hazel')) {
-      $s.SelectVoice('Microsoft Hazel Desktop')
-    } else {
-      $s.SelectVoice('Microsoft Zira Desktop')
-    }
-  }
-  elseif ($line.StartsWith("RATE:")) {
-    try {
-      $s.Rate = [int]$line.Substring(5).Trim()
-    } catch {}
-  }
-  elseif ($line -eq "PAUSE") {
-    if ($s.State -eq [System.Speech.Synthesis.SynthesizerState]::Speaking) {
-      $s.Pause()
-      [Console]::WriteLine("STATE:PAUSED")
-    }
-  }
-  elseif ($line -eq "RESUME") {
-    if ($s.State -eq [System.Speech.Synthesis.SynthesizerState]::Paused) {
-      $s.Resume()
-      [Console]::WriteLine("STATE:SPEAKING")
-    }
-  }
-  elseif ($line -eq "STOP") {
-    $s.SpeakAsyncCancelAll()
-    [Console]::WriteLine("STATE:STOPPED")
-  }
-  elseif ($line -eq "EXIT") {
-    break
-  }
 }
+'@
+
+[SpeechWorker]::Run()
 `;
 
 
@@ -291,7 +292,11 @@ function ensureWorker() {
   if (workerProcess && !workerProcess.killed) return;
 
   try {
-    workerProcess = spawn(PS_EXE, ['-NoProfile', '-NonInteractive', '-Command', PS_WORKER_SCRIPT], {
+    if (!fs.existsSync(WORKER_PS1)) {
+      fs.writeFileSync(WORKER_PS1, WORKER_SCRIPT, 'utf8');
+    }
+
+    workerProcess = spawn(PS_EXE, ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', WORKER_PS1], {
       windowsHide: true,
       stdio: ['pipe', 'pipe', 'pipe']
     });
