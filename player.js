@@ -222,6 +222,7 @@ public class SpeechWorker {
                     byte[] bytes = Convert.FromBase64String(b64);
                     string text = Encoding.UTF8.GetString(bytes);
                     s.SpeakAsyncCancelAll();
+                    if (s.State == SynthesizerState.Paused) s.Resume();
                     s.SpeakAsync(text);
                     Console.WriteLine("STATE:SPEAKING");
                 } catch (Exception ex) {
@@ -247,6 +248,7 @@ public class SpeechWorker {
                 }
             } else if (line == "STOP") {
                 s.SpeakAsyncCancelAll();
+                if (s.State == SynthesizerState.Paused) s.Resume();
                 Console.WriteLine("STATE:STOPPED");
             } else if (line == "EXIT") {
                 break;
