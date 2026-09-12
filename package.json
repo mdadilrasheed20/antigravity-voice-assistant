@@ -1,0 +1,83 @@
+{
+  "name": "antigravity-voice-assistant",
+  "displayName": "Antigravity Voice Assistant",
+  "description": "Fast, 100% offline Text-to-Speech (TTS) voice assistant for Google Antigravity IDE and VS Code. Zero API keys, zero cloud latency, sequential multi-chat queue, and smart Markdown speech normalization.",
+  "version": "1.0.0",
+  "publisher": "adil",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/mdadilrasheed20/antigravity-voice-assistant.git"
+  },
+  "keywords": [
+    "antigravity",
+    "antigravity-ide",
+    "google-antigravity",
+    "text-to-speech",
+    "tts",
+    "voice-assistant",
+    "speech-synthesis",
+    "offline-tts",
+    "screen-reader-alternative",
+    "vscode-tts",
+    "ai-assistant"
+  ],
+  "engines": {
+    "vscode": "^1.74.0"
+  },
+  "main": "./extension.js",
+  "activationEvents": [
+    "*"
+  ],
+  "contributes": {
+    "commands": [
+      {
+        "command": "fastTts.stop",
+        "title": "Stop Speaking",
+        "category": "Voice"
+      },
+      {
+        "command": "fastTts.replayLast",
+        "title": "Replay Last Response",
+        "category": "Voice"
+      },
+      {
+        "command": "fastTts.togglePermanent",
+        "title": "Toggle Permanent Stop / Enable",
+        "category": "Voice"
+      },
+      {
+        "command": "fastTts.prev",
+        "title": "Previous Response",
+        "category": "Voice"
+      },
+      {
+        "command": "fastTts.next",
+        "title": "Next Response",
+        "category": "Voice"
+      },
+      {
+        "command": "fastTts.settings",
+        "title": "Settings (Voice & Speed)",
+        "category": "Voice"
+      }
+    ],
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "fastTtsSidebar",
+          "title": "Voice Assistant",
+          "icon": "resources/voice.svg"
+        }
+      ]
+    },
+    "views": {
+      "fastTtsSidebar": [
+        {
+          "type": "webview",
+          "id": "fastTtsView",
+          "name": "Speech Controls"
+        }
+      ]
+    }
+  }
+}
