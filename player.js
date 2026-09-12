@@ -11,6 +11,23 @@ if (!fs.existsSync(DATA_DIR)) {
 
 const CONFIG_PATH = path.join(DATA_DIR, 'config.json');
 const STATE_PATH = path.join(DATA_DIR, 'state.json');
+
+const DEDUP_PATH = path.join(DIR, 'last_speech.json');
+
+function checkAndSetDeduplication(spokenText) {
+  try {
+    const now = Date.now();
+    if (fs.existsSync(DEDUP_PATH)) {
+      const data = JSON.parse(fs.readFileSync(DEDUP_PATH, 'utf8'));
+      if (data && data.text === spokenText && (now - data.time) < 8000) {
+        return true; // Duplicate!
+      }
+    }
+    fs.writeFileSync(DEDUP_PATH, JSON.stringify({ text: spokenText, time: now }), 'utf8');
+  } catch (e) {}
+  return false;
+}
+
 const PID_PATH = path.join(DATA_DIR, 'active_pid.txt');
 const TEXT_PATH = path.join(DATA_DIR, 'current_speech.txt');
 const PS_EXE = 'C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe';
@@ -200,6 +217,12 @@ $s.Speak($txt)
 `;
 
     try {
+      if (fs.existsSync(PID_PATH)) {
+        try {
+          const oldPid = fs.readFileSync(PID_PATH, 'utf8').trim();
+          if (oldPid) execSync('taskkill /F /T /PID ' + oldPid, { stdio: 'ignore' });
+        } catch (e) {}
+      }
       activeProcess = spawn(PS_EXE, ['-NoProfile', '-NonInteractive', '-Command', psScript], {
         windowsHide: true,
         stdio: 'ignore'
@@ -255,6 +278,10 @@ function playDirect(text, voiceName, rate) {
 function enqueueSpeech(text, voiceName, rate) {
   return new Promise((resolve) => {
     const spokenText = cleanTextForSpeech(text);
+    if (checkAndSetDeduplication(spokenText)) {
+      resolve({ played: false, reason: 'Duplicate speech prevented' });
+      return;
+    }
     if (!spokenText || !spokenText.trim()) {
       resolve({ played: false, reason: 'Empty text' });
       return;

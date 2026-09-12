@@ -4,6 +4,60 @@ const path = require('path');
 const os = require('os');
 const player = require('./player.js');
 
+
+const LOCK_FILE = 'C:\\Users\\Adil\\AppData\\Local\\fast-tts\\watcher.lock';
+const PLAYED_STEPS_PATH = 'C:\\Users\\Adil\\AppData\\Local\\fast-tts\\played_steps.json';
+
+function isWatcherLeader() {
+  const now = Date.now();
+  try {
+    if (fs.existsSync(LOCK_FILE)) {
+      const data = JSON.parse(fs.readFileSync(LOCK_FILE, 'utf8'));
+      if (data && data.pid === process.pid) {
+        fs.writeFileSync(LOCK_FILE, JSON.stringify({ pid: process.pid, time: now }), 'utf8');
+        return true;
+      }
+      if (data && data.time && (now - data.time) < 2500) {
+        try {
+          process.kill(data.pid, 0);
+          return false; // Active leader is running! Stay follower.
+        } catch (e) {
+          // Dead leader
+        }
+      }
+    }
+    fs.writeFileSync(LOCK_FILE, JSON.stringify({ pid: process.pid, time: now }), 'utf8');
+    return true;
+  } catch (e) {
+    return true;
+  }
+}
+
+function hasStepBeenPlayedGlobal(key) {
+  try {
+    if (fs.existsSync(PLAYED_STEPS_PATH)) {
+      const list = JSON.parse(fs.readFileSync(PLAYED_STEPS_PATH, 'utf8'));
+      if (Array.isArray(list) && list.includes(key)) return true;
+    }
+  } catch (e) {}
+  return false;
+}
+
+function recordPlayedStepGlobal(key) {
+  try {
+    let list = [];
+    if (fs.existsSync(PLAYED_STEPS_PATH)) {
+      list = JSON.parse(fs.readFileSync(PLAYED_STEPS_PATH, 'utf8'));
+      if (!Array.isArray(list)) list = [];
+    }
+    if (!list.includes(key)) {
+      list.push(key);
+      if (list.length > 200) list = list.slice(-200);
+      fs.writeFileSync(PLAYED_STEPS_PATH, JSON.stringify(list), 'utf8');
+    }
+  } catch (e) {}
+}
+
 const BRAIN_DIR = path.join(os.homedir(), '.gemini', 'antigravity-ide', 'brain');
 const playedStepKeys = new Set();
 let lastSpokenContent = '';
@@ -116,6 +170,7 @@ function activate(context) {
 
   // Watch for completed model responses across ALL chats in the IDE!
   function pollTranscriptsForNewResponses() {
+    if (!isWatcherLeader()) return;
     const cfg = player.loadConfig();
     if (cfg.enabled === false) return;
 
@@ -143,7 +198,8 @@ function activate(context) {
                 const obj = JSON.parse(line);
                 if (obj.type === 'PLANNER_RESPONSE' && obj.content && obj.content.trim()) {
                   const key = d + ':' + obj.step_index;
-                  if (!playedStepKeys.has(key)) {
+                  if (!playedStepKeys.has(key) && !hasStepBeenPlayedGlobal(key)) {
+                    recordPlayedStepGlobal(key);
                     playedStepKeys.add(key);
 
                     const clean = obj.content.trim();
