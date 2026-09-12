@@ -386,7 +386,7 @@ function activate(context) {
           refreshUI();
           player.playDirect('Voice set to ' + cfg.voice, cfg.voice, cfg.rate);
         } else if (message.command === 'setSpeed') {
-          cfg.rate = parseInt(message.value, 10);
+          cfg.rate = parseFloat(message.value);
           player.saveConfig(cfg);
           refreshUI();
           player.playDirect('Speed set to ' + cfg.rate, cfg.voice, cfg.rate);
@@ -619,7 +619,8 @@ function getWebviewContent(cfg, st) {
 
         const speedRange = document.getElementById('speedRange');
         const speedVal = document.getElementById('speedVal');
-        if (speedRange && c.rate !== undefined) {
+        // Only update slider if user is NOT currently dragging (focused) it
+        if (speedRange && c.rate !== undefined && document.activeElement !== speedRange) {
           speedRange.value = c.rate;
           if (speedVal) speedVal.innerText = c.rate;
         }
