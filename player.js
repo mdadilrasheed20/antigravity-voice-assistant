@@ -9,6 +9,12 @@ const CONFIG_PATH = path.join(DIR, 'config.json');
 const STATE_PATH = path.join(DIR, 'state.json');
 const DEDUP_PATH = path.join(DIR, 'last_speech.json');
 const PID_PATH = path.join(DIR, 'active_pid.txt');
+const CMD_PATH = path.join(DIR, 'cmd.json');
+const IPC_PORT = 19844;
+let ipcServer = null;
+let cmdWatcherInterval = null;
+let lastHandledCmdTime = 0;
+
 const PS_EXE = 'C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe';
 
 function cleanTextForSpeech(raw) {
@@ -206,6 +212,81 @@ while ($line = [Console]::ReadLine()) {
 }
 `;
 
+
+function _ensureIpcServer() {
+  if (ipcServer) return;
+  try {
+    const http = require('http');
+    ipcServer = http.createServer((req, res) => {
+      const cmd = req.url.replace('/', '').toUpperCase();
+      if (cmd === 'PAUSE') _localPause();
+      else if (cmd === 'RESUME') _localResume();
+      else if (cmd === 'STOP') _localStop();
+      res.writeHead(200, { 'Content-Type': 'text/plain' });
+      res.end('OK');
+    });
+    ipcServer.on('error', () => { ipcServer = null; });
+    ipcServer.listen(IPC_PORT, '127.0.0.1');
+  } catch(e) {}
+}
+
+function _ensureCmdWatcher() {
+  if (cmdWatcherInterval) return;
+  cmdWatcherInterval = setInterval(() => {
+    try {
+      if (fs.existsSync(CMD_PATH)) {
+        const data = JSON.parse(fs.readFileSync(CMD_PATH, 'utf8'));
+        if (data && data.time && data.time > lastHandledCmdTime) {
+          lastHandledCmdTime = data.time;
+          if (data.command === 'PAUSE') _localPause();
+          else if (data.command === 'RESUME') _localResume();
+          else if (data.command === 'STOP') _localStop();
+        }
+      }
+    } catch(e) {}
+  }, 40);
+}
+
+function _localPause() {
+  if (workerProcess && workerProcess.stdin) {
+    try { workerProcess.stdin.write('PAUSE\n'); } catch (e) {}
+  }
+  updateState(false, true, activeText, workerProcess ? workerProcess.pid : null);
+}
+
+function _localResume() {
+  if (workerProcess && workerProcess.stdin) {
+    try { workerProcess.stdin.write('RESUME\n'); } catch (e) {}
+  }
+  updateState(true, false, activeText, workerProcess ? workerProcess.pid : null);
+}
+
+function _localStop() {
+  while (queue.length > 0) {
+    const item = queue.shift();
+    if (item.resolve) item.resolve({ played: false, stopped: true });
+  }
+  if (workerProcess && workerProcess.stdin) {
+    try { workerProcess.stdin.write('STOP\n'); } catch (e) {}
+  }
+  updateState(false, false, '', null);
+}
+
+function _broadcastCommand(cmd) {
+  const now = Date.now();
+  lastHandledCmdTime = now;
+  try {
+    fs.writeFileSync(CMD_PATH, JSON.stringify({ command: cmd, time: now }), 'utf8');
+  } catch (e) {}
+
+  try {
+    const http = require('http');
+    const req = http.get('http://127.0.0.1:' + IPC_PORT + '/' + cmd.toLowerCase(), () => {});
+    req.on('error', () => {});
+    req.setTimeout(250, () => req.destroy());
+  } catch (e) {}
+}
+
 function ensureWorker() {
   if (workerProcess && !workerProcess.killed) return;
 
@@ -217,6 +298,8 @@ function ensureWorker() {
 
     const pid = workerProcess.pid;
     fs.writeFileSync(PID_PATH, String(pid), 'utf8');
+    _ensureIpcServer();
+    _ensureCmdWatcher();
 
     workerProcess.stdout.on('data', (buf) => {
       const lines = buf.toString('utf8').trim().split('\n');
@@ -314,18 +397,14 @@ function _playNextInQueue() {
 
 // Pause active speech right where it is
 function pause() {
-  if (workerProcess && workerProcess.stdin) {
-    try { workerProcess.stdin.write('PAUSE\n'); } catch (e) {}
-  }
-  updateState(false, true, activeText, workerProcess ? workerProcess.pid : null);
+  _localPause();
+  _broadcastCommand('PAUSE');
 }
 
 // Resume paused speech from exact paused word
 function resume() {
-  if (workerProcess && workerProcess.stdin) {
-    try { workerProcess.stdin.write('RESUME\n'); } catch (e) {}
-  }
-  updateState(true, false, activeText, workerProcess ? workerProcess.pid : null);
+  _localResume();
+  _broadcastCommand('RESUME');
 }
 
 // Toggle Pause/Resume, or Replay if stopped
@@ -350,17 +429,8 @@ function togglePlayPause() {
 }
 
 function stop() {
-  // Clear queue
-  while (queue.length > 0) {
-    const item = queue.shift();
-    if (item.resolve) item.resolve({ played: false, stopped: true });
-  }
-
-  if (workerProcess && workerProcess.stdin) {
-    try { workerProcess.stdin.write('STOP\n'); } catch (e) {}
-  }
-
-  updateState(false, false, '', null);
+  _localStop();
+  _broadcastCommand('STOP');
 }
 
 function playDirect(text, voiceName, rate) {
