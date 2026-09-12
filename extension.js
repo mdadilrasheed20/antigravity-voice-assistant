@@ -1,4 +1,3 @@
-const net = require('net');
 const vscode = require('vscode');
 const fs = require('fs');
 const path = require('path');
@@ -40,46 +39,7 @@ try {
 } catch (e) {}
 
 
-// TCP Mutex Port: Guarantees ONLY ONE IDE Window acts as Master Audio Watcher
-const MUTEX_PORT = 19842;
-let isMasterWatcher = false;
-let masterServer = null;
-
-function setupMasterElection() {
-  if (isMasterWatcher) return;
-
-  const server = net.createServer((socket) => {
-    socket.on('data', (buf) => {
-      const cmd = buf.toString('utf8').trim();
-      if (cmd === 'STOP') player.stop();
-    });
-  });
-
-  server.once('error', (err) => {
-    if (err.code === 'EADDRINUSE') {
-      // Another IDE window is already the Master! We stay follower.
-      isMasterWatcher = false;
-      masterServer = null;
-    }
-  });
-
-  server.once('listening', () => {
-    isMasterWatcher = true;
-    masterServer = server;
-    console.log('[fast-tts] Master Audio Watcher active on port ' + MUTEX_PORT);
-  });
-
-  server.listen(MUTEX_PORT, '127.0.0.1');
-}
-
 function activate(context) {
-  // Start Master election on IDE startup
-  setupMasterElection();
-  const retryElection = setInterval(() => {
-    if (!isMasterWatcher) setupMasterElection();
-  }, 2500);
-  context.subscriptions.push({ dispose: () => clearInterval(retryElection) });
-
   // Status Bar: Toggle Voice ON/OFF (Permanent mute)
   const barToggle = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 105);
   barToggle.command = 'fastTts.togglePermanent';
@@ -173,8 +133,6 @@ function activate(context) {
 
   // Watch for completed model responses across ALL chats in the IDE!
   function pollTranscriptsForNewResponses() {
-    // ONLY the single Master IDE Window polls transcripts!
-    if (!isMasterWatcher) return;
     const cfg = player.loadConfig();
     if (cfg.enabled === false) return;
 
@@ -649,10 +607,6 @@ function getWebviewContent(cfg, st) {
 }
 
 function deactivate() {
-  if (masterServer) {
-    try { masterServer.close(); } catch (e) {}
-    masterServer = null;
-  }
   player.stop();
 }
 
