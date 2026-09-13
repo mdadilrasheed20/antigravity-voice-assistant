@@ -55,18 +55,126 @@ function splitIntoLines(text) {
   return result.length > 0 ? result : [text.trim()];
 }
 
+function isCodeLine(line) {
+  const trimmed = line.trim();
+  if (!trimmed) return false;
+
+  // Comments are English descriptions, not raw syntax
+  if (/^(\/\/|#|--|\/\*|\*)/.test(trimmed)) return false;
+
+  // Numbered list: 1. ..., 2) ...
+  if (/^\d+[\.\)]\s+/.test(trimmed)) return false;
+
+  // Bullet points: - ..., * ...
+  if (/^[-*•]\s+[A-Za-z]/.test(trimmed)) return false;
+
+  // Common CLI commands to speak: git ..., npm ..., dotnet ...
+  if (/^(npm|git|dotnet|node|npx|cd|cat|ls|dir|mkdir|rm|cp|mv)\s+/.test(trimmed)) return false;
+
+  // Programming declaration & control flow keywords
+  if (/^(public|private|protected|internal|class|interface|struct|enum|record|namespace|using|import|export|from|package|function|def|void|return|const|let|var|if|else\s+if|for|foreach|while|do|switch|case|catch|finally|throw|try)\b/.test(trimmed)) {
+    return true;
+  }
+
+  // Type declarations / assignment: int x = ..., string s = ..., var a = ...
+  if (/^(int|string|bool|boolean|float|double|decimal|char|byte|long|short|object|dynamic|Task|List|Dictionary|IEnumerable|auto)\b\s+[\w<>]+\s*[=;]/.test(trimmed)) {
+    return true;
+  }
+
+  // SQL queries
+  if (/^(SELECT|INSERT|UPDATE|DELETE|CREATE|ALTER|DROP|EXEC|EXECUTE|DECLARE|SET|GRANT|REVOKE)\b/i.test(trimmed)) {
+    return true;
+  }
+
+  // HTML / XML tags: <div ...>, </tag>
+  if (/^<\/?[a-zA-Z][^>]*>$/.test(trimmed)) {
+    return true;
+  }
+
+  // JSON key-value: "key": "value", or "key": {
+  if (/^"[\w\.\-]+"s*:s*[\{\[\"0-9a-zA-Z]/.test(trimmed)) {
+    return true;
+  }
+
+  // Ends with semicolon or braces
+  if (/[;{}]$/.test(trimmed)) {
+    return true;
+  }
+
+  // Contains typical code arrows / operators: =>, ->, !==, ===, ++, --, &&, ||
+  if (/(=>|->|!==|===|\+\+|--|&&|\|\|)/.test(trimmed)) {
+    return true;
+  }
+
+  return false;
+}
+
+function cleanCodeBlockForSpeech(match) {
+  const firstLineEnd = match.indexOf('\n');
+  let lang = '';
+  let content = '';
+  if (firstLineEnd !== -1) {
+    lang = match.slice(3, firstLineEnd).trim().toLowerCase();
+    content = match.slice(firstLineEnd + 1, -3).trim();
+  } else {
+    content = match.slice(3, -3).trim();
+  }
+
+  if (!content) return '';
+
+  const lines = content.split(/\r?\n/);
+  
+  // Explicit text/output/markdown languages are 100% spoken
+  const textLangs = new Set(['text', 'txt', 'plaintext', 'plain', 'markdown', 'md', 'output', 'log', 'console', 'terminal']);
+  if (textLangs.has(lang)) {
+    return '\n' + content + '\n';
+  }
+
+  let readableLines = [];
+  let codeLineCount = 0;
+
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+    if (isCodeLine(trimmed)) {
+      codeLineCount++;
+    } else {
+      // Strip comment markers for natural speech
+      const cleaned = trimmed
+        .replace(/^(\/\/|#|--|\/\*|\*)\s*/, '')
+        .replace(/\*\/$/, '');
+      if (cleaned.trim()) {
+        readableLines.push(cleaned.trim());
+      }
+    }
+  }
+
+  // If there is NO code at all (100% English lines)
+  if (codeLineCount === 0) {
+    return '\n' + readableLines.join('\n') + '\n';
+  }
+
+  // If mostly English or mixed instructions
+  if (readableLines.length >= codeLineCount || (readableLines.length >= 2 && codeLineCount <= 3)) {
+    return '\n' + readableLines.join('\n') + '\n';
+  }
+
+  // If it's a code block with English comments explaining it: speak the comments!
+  if (readableLines.length > 0) {
+    return '\n' + readableLines.join('. ') + '. as shown in the code snippet.\n';
+  }
+
+  // Pure code with zero English: summarize cleanly
+  const label = lang ? (lang + ' snippet') : 'code snippet';
+  return ' as shown in the ' + label + '. ';
+}
+
 function cleanTextForSpeech(raw) {
   if (!raw || typeof raw !== 'string') return '';
   let text = raw;
 
-  // 1. Code blocks: summarize long blocks
-  text = text.replace(/```[\s\S]*?```/g, (match) => {
-    const inner = match.replace(/^```[a-zA-Z0-9_\-\+]*\r?\n?/, '').replace(/\r?\n?```$/, '').trim();
-    if (inner.split(/\r?\n/).length <= 2 && inner.length < 60) {
-      return ' ' + inner + '. ';
-    }
-    return ' as shown in the code snippet. ';
-  });
+  // 1. Code blocks: intelligently preserve English text/comments, skip only pure code syntax
+  text = text.replace(/\`\`\`[\s\S]*?\`\`\`/g, cleanCodeBlockForSpeech);
 
   // 2. Strip HTML tags: <tag ...>
   text = text.replace(/<[^>]+>/g, ' ');
