@@ -155,59 +155,8 @@ function activate(context) {
 
   refreshUI();
 
-  // Watch for completed model responses across ALL chats in the IDE!
-  function pollTranscriptsForNewResponses() {
-    const cfg = player.loadConfig();
-    if (cfg.enabled === false) return;
-
-    try {
-      if (!fs.existsSync(BRAIN_DIR)) return;
-      const dirs = fs.readdirSync(BRAIN_DIR);
-      for (const d of dirs) {
-        const p = path.join(BRAIN_DIR, d, '.system_generated', 'logs', 'transcript.jsonl');
-        if (fs.existsSync(p)) {
-          const stat = fs.statSync(p);
-          // Only check transcripts updated in the last 2 minutes
-          if (Date.now() - stat.mtimeMs > 120000) continue;
-
-          const chunkSize = Math.min(stat.size, 16 * 1024);
-          const buffer = Buffer.alloc(chunkSize);
-          const fd = fs.openSync(p, 'r');
-          fs.readSync(fd, buffer, 0, chunkSize, Math.max(0, stat.size - chunkSize));
-          fs.closeSync(fd);
-
-          const lines = buffer.toString('utf8').split('\n');
-          for (let i = lines.length - 1; i >= 0; i--) {
-            const line = lines[i].trim();
-            if (line.includes('"PLANNER_RESPONSE"')) {
-              try {
-                const obj = JSON.parse(line);
-                if (obj.type === 'PLANNER_RESPONSE' && obj.content && obj.content.trim()) {
-                  const key = d + ':' + obj.step_index;
-                  if (!playedStepKeys.has(key)) {
-                    playedStepKeys.add(key);
-
-                    // Check deduplication with lastSpokenContent
-                    const clean = obj.content.trim();
-                    if (clean !== lastSpokenContent) {
-                      lastSpokenContent = clean;
-                      player.enqueueSpeech(clean, cfg.voice, cfg.rate);
-                      refreshUI();
-                    }
-                  }
-                  break;
-                }
-              } catch (e) {}
-            }
-          }
-        }
-      }
-    } catch (e) {}
-  }
-
   const watcherInterval = setInterval(() => {
     refreshUI();
-    pollTranscriptsForNewResponses();
   }, 400);
 
   context.subscriptions.push({ dispose: () => clearInterval(watcherInterval) });
@@ -250,7 +199,7 @@ function activate(context) {
       const item = cfg.history[idx];
       vscode.window.showInformationMessage('Replaying: "' + item.text.substring(0, 45) + '..."');
       lastSpokenContent = item.text.trim();
-      player.playDirect(item.text, cfg.voice, cfg.rate);
+      player.replay();
       refreshUI();
     } else {
       vscode.window.showInformationMessage('No speech history available to replay.');

@@ -124,9 +124,11 @@ function cleanTextForSpeech(raw) {
   text = text.replace(/\|/g, ' ');
   text = text.replace(/---+/g, ' ');
 
-  // 16. Clean up whitespace and punctuation
-  text = text.replace(/\s+/g, ' ').trim();
-  text = text.replace(/\s+([.,;:?!])/g, '$1');
+  // 16. Clean up whitespace and punctuation, PRESERVING newlines
+  text = text.replace(/[ \t]+/g, ' ');
+  text = text.replace(/[ \t]*\r?\n[ \t]*/g, '\n');
+  text = text.replace(/\n{3,}/g, '\n\n').trim();
+  text = text.replace(/[ \t]+([.,;:?!])/g, '$1');
 
   return text;
 }
@@ -188,6 +190,7 @@ function checkAndSetDeduplication(spokenText) {
 let workerProcess = null;
 let currentResolve = null;
 let activeText = '';
+let isBusy = false;
 const queue = [];
 
 const WORKER_PS1 = path.join(DIR, 'worker.ps1');
@@ -262,6 +265,22 @@ public class SpeechWorker {
 `;
 
 
+
+function isMaster() {
+  if (workerProcess !== null) return true;
+  const PID_FILE = path.join(DIR, 'watcher.pid');
+  try {
+    if (fs.existsSync(PID_FILE)) {
+      const pid = parseInt(fs.readFileSync(PID_FILE, 'utf8').trim(), 10);
+      if (pid && pid !== process.pid) {
+        process.kill(pid, 0);
+        return false;
+      }
+    }
+  } catch (e) {}
+  return true;
+}
+
 function _ensureIpcServer() {
   if (ipcServer) return;
   try {
@@ -275,11 +294,19 @@ function _ensureIpcServer() {
         res.end('IGNORED_SELF');
         return;
       }
+      lastHandledCmdTime = Date.now();
       if (cmd === 'PAUSE') _localPause();
       else if (cmd === 'RESUME') _localResume();
       else if (cmd === 'STOP') _localStop();
       else if (cmd === 'NEXT') _localNextLine();
       else if (cmd === 'PREV') _localPrevLine();
+      else if (cmd === 'REPLAY') _localReplay();
+      else if (cmd === 'SPEAK') {
+        const text = u.searchParams.get('text');
+        const voice = u.searchParams.get('voice');
+        const rate = parseFloat(u.searchParams.get('rate')) || 1;
+        if (text) _localPlayDirect(text, voice, rate);
+      }
       res.writeHead(200, { 'Content-Type': 'text/plain' });
       res.end('OK');
     });
@@ -289,7 +316,7 @@ function _ensureIpcServer() {
 }
 
 function _ensureCmdWatcher() {
-  if (cmdWatcherInterval) return;
+  if (ipcServer || cmdWatcherInterval) return;
   lastHandledCmdTime = Date.now();
   cmdWatcherInterval = setInterval(() => {
     try {
@@ -303,6 +330,8 @@ function _ensureCmdWatcher() {
           else if (data.command === 'STOP') _localStop();
           else if (data.command === 'NEXT') _localNextLine();
           else if (data.command === 'PREV') _localPrevLine();
+          else if (data.command === 'REPLAY') _localReplay();
+          else if (data.command === 'SPEAK' && data.text) _localPlayDirect(data.text, data.voice, data.rate);
         }
       }
     } catch(e) {}
@@ -324,6 +353,7 @@ function _localResume() {
 }
 
 function _localStop() {
+  isBusy = false;
   while (queue.length > 0) {
     const item = queue.shift();
     if (item.resolve) item.resolve({ played: false, stopped: true });
@@ -334,19 +364,26 @@ function _localStop() {
   updateState(false, false, '', null);
 }
 
-function _broadcastCommand(cmd) {
+function _broadcastCommand(cmd, extra = {}) {
   const now = Date.now();
-  lastHandledCmdTime = now;
-  try {
-    fs.writeFileSync(CMD_PATH, JSON.stringify({ command: cmd, time: now, senderPid: process.pid }), 'utf8');
-  } catch (e) {}
-
   try {
     const http = require('http');
-    const req = http.get('http://127.0.0.1:' + IPC_PORT + '/' + cmd.toLowerCase() + '?senderPid=' + process.pid, () => {});
-    req.on('error', () => {});
+    let url = 'http://127.0.0.1:' + IPC_PORT + '/' + cmd.toLowerCase() + '?senderPid=' + process.pid;
+    if (extra.text) url += '&text=' + encodeURIComponent(extra.text);
+    if (extra.voice) url += '&voice=' + encodeURIComponent(extra.voice);
+    if (extra.rate) url += '&rate=' + extra.rate;
+    const req = http.get(url, (res) => {});
+    req.on('error', () => {
+      try {
+        fs.writeFileSync(CMD_PATH, JSON.stringify({ command: cmd, time: now, senderPid: process.pid, ...extra }), 'utf8');
+      } catch (e) {}
+    });
     req.setTimeout(250, () => req.destroy());
-  } catch (e) {}
+  } catch (e) {
+    try {
+      fs.writeFileSync(CMD_PATH, JSON.stringify({ command: cmd, time: now, senderPid: process.pid, ...extra }), 'utf8');
+    } catch (err) {}
+  }
 }
 
 function ensureWorker() {
@@ -388,7 +425,12 @@ function ensureWorker() {
           updateState(true, false, currentLines[currentLineIndex] || activeText, pid, currentLineIndex, currentLines.length);
         } else if (l === 'STATE:PAUSED') {
           updateState(false, true, activeText, pid);
-        } else if (l === 'STATE:STOPPED' || l === 'EVENT:DONE') {
+        } else if (l === 'STATE:STOPPED') {
+          if (!isBusy) {
+            updateState(false, false, '', null);
+          }
+        } else if (l === 'EVENT:DONE') {
+          isBusy = false;
           updateState(false, false, '', null);
           if (currentResolve) {
             const res = currentResolve;
@@ -444,10 +486,12 @@ function _startPlayback(spokenText, voiceName, rate) {
     }
 
     currentResolve = resolve;
+    isBusy = true;
     currentLines = splitIntoLines(spokenText);
     currentLineIndex = 0;
     currentVoice = voiceName || 'Zira';
     currentRate = typeof rate === 'number' ? rate : 1;
+    updateState(true, false, currentLines[0] || spokenText, workerProcess ? workerProcess.pid : null, 0, currentLines.length);
 
     const cfg = loadConfig();
     const voice = voiceName || cfg.voice || 'Zira';
@@ -476,7 +520,9 @@ function _startPlayback(spokenText, voiceName, rate) {
 
 function _playNextInQueue() {
   const st = loadState();
-  if (st.isSpeaking || st.isPaused || queue.length === 0) {
+  if (st.isPaused) return;
+  if (queue.length === 0) {
+    isBusy = false;
     return;
   }
   const next = queue.shift();
@@ -581,26 +627,38 @@ function _localPrevLine() {
 }
 
 function nextLine() {
-  const res = _localNextLine();
+  if (isMaster()) {
+    const res = _localNextLine();
+    _broadcastCommand('NEXT');
+    return res;
+  }
   _broadcastCommand('NEXT');
-  return res;
+  return null;
 }
 
 function prevLine() {
-  const res = _localPrevLine();
+  if (isMaster()) {
+    const res = _localPrevLine();
+    _broadcastCommand('PREV');
+    return res;
+  }
   _broadcastCommand('PREV');
-  return res;
+  return null;
 }
 
 // Pause active speech right where it is
 function pause() {
-  _localPause();
+  if (isMaster()) {
+    _localPause();
+  }
   _broadcastCommand('PAUSE');
 }
 
 // Resume paused speech from exact paused word
 function resume() {
-  _localResume();
+  if (isMaster()) {
+    _localResume();
+  }
   _broadcastCommand('RESUME');
 }
 
@@ -615,25 +673,51 @@ function togglePlayPause() {
     return 'RESUMED';
   } else {
     // Idle -> Replay last
-    const cfg = loadConfig();
-    if (cfg.history && cfg.history.length > 0) {
-      const last = cfg.history[cfg.history.length - 1];
-      playDirect(last.text, last.voice, last.rate);
-      return 'REPLAYING';
+    replay();
+    return 'REPLAYING';
+  }
+}
+
+
+function _localReplay() {
+  const cfg = loadConfig();
+  if (cfg.history && cfg.history.length > 0) {
+    let idx = cfg.currentIndex;
+    if (typeof idx !== 'number' || idx < 0 || idx >= cfg.history.length) {
+      idx = cfg.history.length - 1;
+    }
+    const item = cfg.history[idx];
+    if (item && item.text) {
+      _localPlayDirect(item.text, item.voice, item.rate);
     }
   }
-  return 'IDLE';
+}
+
+function replay() {
+  if (isMaster()) {
+    _localReplay();
+  }
+  _broadcastCommand('REPLAY');
 }
 
 function stop() {
-  _localStop();
+  if (isMaster()) {
+    _localStop();
+  }
   _broadcastCommand('STOP');
 }
 
-function playDirect(text, voiceName, rate) {
-  stop();
+function _localPlayDirect(text, voiceName, rate) {
+  _localStop();
   const spokenText = cleanTextForSpeech(text);
   return _startPlayback(spokenText, voiceName, rate);
+}
+
+function playDirect(text, voiceName, rate) {
+  if (isMaster()) {
+    _localPlayDirect(text, voiceName, rate);
+  }
+  _broadcastCommand('SPEAK', { text, voice: voiceName, rate });
 }
 
 function enqueueSpeech(text, voiceName, rate) {
@@ -671,7 +755,7 @@ function enqueueSpeech(text, voiceName, rate) {
       _startPlayback(spokenText, voice, spd).then(resolve);
       return;
     }
-    if (st.isSpeaking) {
+    if (isBusy || st.isSpeaking) {
       queue.push({ text: spokenText, voice, rate: spd, resolve });
     } else {
       _startPlayback(spokenText, voice, spd).then(resolve);
@@ -693,5 +777,6 @@ module.exports = {
   playDirect,
   enqueueSpeech,
   nextLine,
-  prevLine
+  prevLine,
+  replay
 };
