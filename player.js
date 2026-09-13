@@ -292,6 +292,12 @@ function isMaster() {
   return true;
 }
 
+
+function startDaemonListeners() {
+  _ensureIpcServer();
+  _ensureCmdWatcher();
+}
+
 function _ensureIpcServer() {
   if (ipcServer) return;
   try {
@@ -327,7 +333,7 @@ function _ensureIpcServer() {
 }
 
 function _ensureCmdWatcher() {
-  if (ipcServer || cmdWatcherInterval) return;
+  if (cmdWatcherInterval) return;
   lastHandledCmdTime = Date.now();
   cmdWatcherInterval = setInterval(() => {
     try {
@@ -377,24 +383,21 @@ function _localStop() {
 
 function _broadcastCommand(cmd, extra = {}) {
   const now = Date.now();
+  // Dual-channel IPC: Always record to cmd.json for zero dropped commands
+  try {
+    fs.writeFileSync(CMD_PATH, JSON.stringify({ command: cmd, time: now, senderPid: process.pid, ...extra }), 'utf8');
+  } catch (e) {}
+
   try {
     const http = require('http');
     let url = 'http://127.0.0.1:' + IPC_PORT + '/' + cmd.toLowerCase() + '?senderPid=' + process.pid;
     if (extra.text) url += '&text=' + encodeURIComponent(extra.text);
     if (extra.voice) url += '&voice=' + encodeURIComponent(extra.voice);
     if (extra.rate) url += '&rate=' + extra.rate;
-    const req = http.get(url, (res) => {});
-    req.on('error', () => {
-      try {
-        fs.writeFileSync(CMD_PATH, JSON.stringify({ command: cmd, time: now, senderPid: process.pid, ...extra }), 'utf8');
-      } catch (e) {}
-    });
+    const req = http.get(url, () => {});
+    req.on('error', () => {});
     req.setTimeout(250, () => req.destroy());
-  } catch (e) {
-    try {
-      fs.writeFileSync(CMD_PATH, JSON.stringify({ command: cmd, time: now, senderPid: process.pid, ...extra }), 'utf8');
-    } catch (err) {}
-  }
+  } catch (e) {}
 }
 
 function ensureWorker() {
@@ -430,7 +433,10 @@ function ensureWorker() {
               if (charPos >= currentLineOffsets[i].offset) {
                 if (currentLineIndex !== currentLineOffsets[i].index) {
                   currentLineIndex = currentLineOffsets[i].index;
-                  updateState(true, false, currentLines[currentLineIndex] || activeText, pid, currentLineIndex, currentLines.length);
+                  const curSt = loadState();
+                  if (!curSt.isPaused) {
+                    updateState(true, false, currentLines[currentLineIndex] || activeText, pid, currentLineIndex, currentLines.length);
+                  }
                 }
                 break;
               }
@@ -779,6 +785,7 @@ function enqueueSpeech(text, voiceName, rate) {
 }
 
 module.exports = {
+  startDaemonListeners,
   cleanTextForSpeech,
   splitIntoLines,
   loadConfig,

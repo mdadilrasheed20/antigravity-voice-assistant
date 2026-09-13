@@ -13,7 +13,7 @@ public class SpeechWorker {
             }
         };
 
-                s.SpeakProgress += (sender, e) => {
+        s.SpeakProgress += (sender, e) => {
             Console.WriteLine("PROGRESS:" + e.CharacterPosition);
         };
 
@@ -43,19 +43,27 @@ public class SpeechWorker {
                 int r;
                 if (int.TryParse(line.Substring(5).Trim(), out r)) s.Rate = r;
             } else if (line == "PAUSE") {
-                if (s.State == SynthesizerState.Speaking) {
+                try {
                     s.Pause();
                     Console.WriteLine("STATE:PAUSED");
+                } catch (Exception ex) {
+                    Console.WriteLine("ERROR:PAUSE:" + ex.Message);
                 }
             } else if (line == "RESUME") {
-                if (s.State == SynthesizerState.Paused) {
+                try {
                     s.Resume();
                     Console.WriteLine("STATE:SPEAKING");
+                } catch (Exception ex) {
+                    Console.WriteLine("ERROR:RESUME:" + ex.Message);
                 }
             } else if (line == "STOP") {
-                s.SpeakAsyncCancelAll();
-                if (s.State == SynthesizerState.Paused) s.Resume();
-                Console.WriteLine("STATE:STOPPED");
+                try {
+                    s.SpeakAsyncCancelAll();
+                    if (s.State == SynthesizerState.Paused) s.Resume();
+                    Console.WriteLine("STATE:STOPPED");
+                } catch (Exception ex) {
+                    Console.WriteLine("ERROR:STOP:" + ex.Message);
+                }
             } else if (line == "EXIT") {
                 break;
             }

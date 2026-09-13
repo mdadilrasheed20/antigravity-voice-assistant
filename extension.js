@@ -164,14 +164,20 @@ function activate(context) {
   // Registered Commands
     context.subscriptions.push(vscode.commands.registerCommand('fastTts.pause', () => {
     player.pause();
+    barAction.text = '$(play) Resume';
+    barAction.tooltip = 'Voice is paused. Click to RESUME speech.';
+    barAction.backgroundColor = new vscode.ThemeColor('statusBarItem.prominentBackground');
+    barAction.command = 'fastTts.resume';
     vscode.window.showInformationMessage('Spoken audio paused.');
-    refreshUI();
   }));
 
   context.subscriptions.push(vscode.commands.registerCommand('fastTts.resume', () => {
     player.resume();
+    barAction.text = '$(debug-pause) Pause';
+    barAction.tooltip = 'Voice is speaking. Click to PAUSE speech.';
+    barAction.backgroundColor = new vscode.ThemeColor('statusBarItem.warningBackground');
+    barAction.command = 'fastTts.pause';
     vscode.window.showInformationMessage('Spoken audio resumed.');
-    refreshUI();
   }));
 
   context.subscriptions.push(vscode.commands.registerCommand('fastTts.togglePlayPause', () => {
@@ -183,8 +189,12 @@ function activate(context) {
 
   context.subscriptions.push(vscode.commands.registerCommand('fastTts.stop', () => {
     player.stop();
+    barAction.text = '$(play) Play';
+    barAction.tooltip = 'Click to replay the last spoken assistant response.';
+    barAction.backgroundColor = undefined;
+    barAction.command = 'fastTts.replayLast';
+    if (typeof barStop !== 'undefined') barStop.hide();
     vscode.window.showInformationMessage('Spoken audio cancelled.');
-    refreshUI();
   }));
 
   context.subscriptions.push(vscode.commands.registerCommand('fastTts.replayLast', () => {
