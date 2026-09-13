@@ -151,7 +151,18 @@ function saveConfig(cfg) {
 function loadState() {
   try {
     if (fs.existsSync(STATE_PATH)) {
-      return JSON.parse(fs.readFileSync(STATE_PATH, 'utf8'));
+      const st = JSON.parse(fs.readFileSync(STATE_PATH, 'utf8'));
+      if (st.isSpeaking && st.activePid) {
+        try {
+          process.kill(st.activePid, 0);
+        } catch (e) {
+          st.isSpeaking = false;
+          st.isPaused = false;
+          st.activePid = null;
+          updateState(false, false, '', null);
+        }
+      }
+      return st;
     }
   } catch (e) {}
   return { isSpeaking: false, isPaused: false, currentText: '', activePid: null, queueLength: 0 };
@@ -404,10 +415,14 @@ function ensureWorker() {
     _ensureIpcServer();
     _ensureCmdWatcher();
 
+    let stdoutBuf = '';
     workerProcess.stdout.on('data', (buf) => {
-      const lines = buf.toString('utf8').trim().split('\n');
+      stdoutBuf += buf.toString('utf8');
+      const lines = stdoutBuf.split('\n');
+      stdoutBuf = lines.pop();
       for (const line of lines) {
         const l = line.trim();
+        if (!l) continue;
         if (l.startsWith('PROGRESS:')) {
           const charPos = parseInt(l.substring(9), 10);
           if (!isNaN(charPos) && currentLineOffsets.length > 0) {
